@@ -33,8 +33,9 @@ const TOUR_CONTENT = 'Plug in your guitar, hand a friend a Guitar Hero or Rock B
     + ' You play the song together on one stage.';
 
 // Register RockHeroSmith with core's play-mode registry and subscribe to Press Start.
+// openSolo: opens the Solo screen (the hero's Play solo button).
 // -> dispose(): unregisters and unsubscribes, once. Older core (no registerPlayMode): a no-op.
-export function registerMainMode({ win, getScreen, getRuntime, showScreen }) {
+export function registerMainMode({ win, getScreen, getRuntime, showScreen, openSolo }) {
     const fb = win && win.feedBack;
     if (!fb || !fb.ui || typeof fb.ui.registerPlayMode !== 'function') return () => {};
 
@@ -62,6 +63,22 @@ export function registerMainMode({ win, getScreen, getRuntime, showScreen }) {
         showScreen(SCREEN_ID);
         return true;
     }
+    // The Home hero: the art, plus Play solo beside core's Play RockHeroSmith (the band).
+    function renderHero(el) {
+        if (!el) return;
+        renderHeroArt(el);
+        const old = typeof el.querySelector === 'function' ? el.querySelector('.rhs-hero-solo') : null;
+        if (old) old.remove();
+        const doc = el.ownerDocument || win.document;
+        if (typeof openSolo !== 'function' || !doc || typeof doc.createElement !== 'function') return;
+        const b = doc.createElement('button');
+        b.type = 'button';
+        b.className = 'rhs-hero-solo';
+        b.textContent = 'Play solo';
+        b.setAttribute('title', 'Play a song alone on drums, a controller or guitar');
+        b.addEventListener('click', () => { if (idle()) openSolo(); });
+        el.appendChild(b);
+    }
     // Press Start: Setup with that pad joined. Core never emits on plugin screens;
     // the on-screen check is a backstop.
     function onStart(e) {
@@ -75,7 +92,7 @@ export function registerMainMode({ win, getScreen, getRuntime, showScreen }) {
 
     const unregister = fb.ui.registerPlayMode({
         id: MODE_ID, label: 'RockHeroSmith', startLabel: 'Play RockHeroSmith', order: 10,
-        startPress: true, renderHero: renderHeroArt, start: openSetupEntry,
+        startPress: true, renderHero, start: openSetupEntry,
         tour: { title: 'Play RockHeroSmith', content: TOUR_CONTENT },
         cardAction: { label: 'RockHeroSmith', title: 'Play with RockHeroSmith', isAvailable: isBandReady, run: openSongEntry },
     });

@@ -781,3 +781,72 @@ body.rhs-settings-over #settings .fb-settings-back { display: none; }
     mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M13 2L4 14h7l-1 8 9-12h-7l1-8z'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 /* ===== end Plan 9 Task 11 ===== */
+
+/* ===== Solo screen (#rockherosmith-solo-root.rhs-screen.rhs-solo, src/solo-screen.js) ===== */
+.rhs-screen.rhs-solo { --rhs-c: #ff6b1a; }
+.rhs-solo .rhs-solo-main { max-width: 1100px; margin: 0 auto; padding: 26px 20px; display: flex; flex-direction: column; gap: 16px; }
+.rhs-solo .rhs-solo-head,
+.rhs-screen .rhs-setuphead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.rhs-screen .rhs-setuphead { margin-bottom: 18px; }
+.rhs-solo .rhs-solo-head .rhs-step,
+.rhs-screen .rhs-setuphead .rhs-step { margin: 0; }
+.rhs-solo .rhs-solo-band,
+.rhs-screen .rhs-to-solo,
+.rhs-solo .rhs-solo-browse,
+.rhs-solo .rhs-solo-controls,
+.rhs-solo .rhs-solo-more {
+    padding: 8px 14px; font-size: 13px; cursor: pointer; white-space: nowrap;
+    background: transparent; border: 1px solid var(--rhs-line); border-radius: 7px;
+}
+.rhs-solo .rhs-solo-controls { margin-left: auto; border-color: #b4572a; }
+.rhs-solo .rhs-solo-band:hover, .rhs-screen .rhs-to-solo:hover, .rhs-solo .rhs-solo-browse:hover,
+.rhs-solo .rhs-solo-controls:hover, .rhs-solo .rhs-solo-more:hover { border-color: var(--rhs-c, #ff6b1a); }
+.rhs-solo .rhs-seg[data-field="instrument"] button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 12px 14px; font-size: 14px; font-weight: 600;
+}
+.rhs-solo .rhs-solo-ico svg { display: block; }
+.rhs-solo .rhs-solo-fields,
+.rhs-solo .rhs-solo-opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px 24px; }
+.rhs-solo .rhs-solo-status {
+    display: flex; align-items: center; gap: 12px; min-height: 2.6em; padding: 8px 12px;
+    background: var(--rhs-panel); border: 1px solid var(--rhs-line); border-radius: 8px; color: var(--rhs-dim);
+}
+.rhs-solo .rhs-solo-status.rhs-warn { border-color: #b4572a; color: #ffb48a; }
+.rhs-solo .rhs-solo-status.rhs-ok { color: var(--rhs-ok); }
+.rhs-solo .rhs-solo-listhead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
+.rhs-solo .rhs-solo-listlabel { flex: 1; margin: 0; font-family: var(--rhs-head); font-weight: 700; font-size: 18px; }
+.rhs-solo .rhs-solo-search {
+    min-width: 220px; padding: 8px 10px; font: inherit; color: inherit;
+    background: var(--rhs-field); border: 1px solid var(--rhs-line); border-radius: 7px;
+}
+.rhs-solo .rhs-solo-search:focus { outline: none; border-color: var(--rhs-c); }
+.rhs-solo .rhs-solo-note { min-height: 1.2em; color: var(--rhs-dim); }
+.rhs-solo .rhs-solo-list {
+    list-style: none; margin: 0; padding: 0;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px;
+}
+.rhs-solo .rhs-solo-song {
+    width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+    padding: 10px 12px; text-align: left; cursor: pointer;
+    background: var(--rhs-panel); border: 1px solid var(--rhs-line); border-radius: 8px;
+}
+.rhs-solo .rhs-solo-song:hover,
+.rhs-solo .rhs-solo-song:focus-visible {
+    outline: none; border-color: var(--rhs-c);
+    background: color-mix(in srgb, var(--rhs-c) 14%, var(--rhs-panel));
+}
+.rhs-solo .rhs-solo-title,
+.rhs-solo .rhs-solo-artist { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rhs-solo .rhs-solo-title { font-weight: 600; }
+.rhs-solo .rhs-solo-artist { font-size: 12px; color: var(--rhs-dim); }
+.rhs-solo .rhs-solo-list.rhs-solo-blocked .rhs-solo-song { opacity: 0.5; }
+.rhs-solo .rhs-solo-more { align-self: center; }
+/* The Home hero's Play solo, beside core's Play RockHeroSmith */
+.rhs-hero-solo {
+    margin-top: .25rem; padding: .45rem 1.1rem; cursor: pointer;
+    font: 700 .875rem/1.2 'Barlow', system-ui, sans-serif; color: #f8fafc;
+    background: rgba(15, 23, 42, .55); border: 1px solid rgba(255, 107, 26, .7); border-radius: 999px;
+}
+.rhs-hero-solo:hover, .rhs-hero-solo:focus-visible { background: rgba(255, 107, 26, .25); outline: none; }
+/* ===== end Solo screen ===== */
