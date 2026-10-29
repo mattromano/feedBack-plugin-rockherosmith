@@ -13,11 +13,12 @@ import { planStage } from './stage.js';
 import { PART_TYPES, getPart, hasChart, songFacts } from './parts.js';
 import { karaokeApi, armVocals, startVocals, stopVocals, showKaraokeHud } from './vocals.js';
 import { createBandScore } from './band-score.js';
-import { guitarEntry, drumsEntry, vocalsEntry, vocalsTotals, onsetTime } from './part-events.js';
+import { guitarEntry, drumsEntry, drumsBonusEntry, vocalsEntry, vocalsTotals, onsetTime } from './part-events.js';
+import { playerInfo, judgmentEvent, resultEvent, sessionIdFor } from './play-events.js';
 import { chartPhrases } from './guitar-od.js';
 import { createOverdriveSession } from './overdrive-session.js';
 import { stemIdFor, muteStem, restoreStem, SOUND_CLAIM_ID, STEM_SOUND_CLAIM_PREFIX } from './stem-claims.js';
-import { createDrumSound } from './drum-sound.js';
+import { createDrumSound, padsMuted } from './drum-sound.js';
 import { createStemSound, FULL_MIX, isUnsplit } from './stem-sound.js';
 import { createMissSound } from './miss-sound.js';
 import { createMixMuffle } from './mix-muffle.js';
@@ -67,12 +68,16 @@ function safe(fn) {
     try { return fn(); } catch (e) { console.warn('[rockherosmith]', e); return undefined; }
 }
 
-// The prefs a session runs with: Rock Band / My kit need a drum stem, so a
-// song without one plays with the song's own drums.
-function sessionPrefs(prefs, item) {
+// The prefs a session runs with: Rock Band / Kit only need a drum stem, so a
+// song without one plays with the song's own drums; except Rock Band on an
+// unsplit song, which muffles the full mix as controllers do (contract §6).
+// stemIds: the song's stems (the library item's, or stems' own list).
+function sessionPrefs(prefs, item, stemIds) {
     const drums = prefs && prefs.parts && prefs.parts.drums;
     if (!drums || !STEM_SOUND_MODES.includes(drums.soundMode)) return prefs;
-    if (songFacts(item).stemIds.includes('drums')) return prefs;
+    const ids = Array.isArray(stemIds) && stemIds.length ? stemIds : songFacts(item).stemIds;
+    if (ids.includes('drums')) return prefs;
+    if (drums.soundMode === 'rockband' && isUnsplit(ids)) return prefs;
     return { ...prefs, parts: { ...prefs.parts, drums: { ...drums, soundMode: 'song' } } };
 }
 
@@ -128,6 +133,12 @@ function withoutVocals(prefs) {
 //   (never for Play again or leaving), so the band screen can open its song pick.
 //   deviceMemo: the inputs last handed to note_detect / drums (devices.js),
 //   shared with the band screen so a Go doesn't re-apply a device just picked.
+//   adopt: optional (play layer contract §2); adopt(song) -> prefs | null | Promise of
+//   either: the one-player prefs a plain play (song:ready outside a session) becomes.
+//   onShowSoloScreen({ next }): optional; Next song after a solo session (else the band screen).
+//   onQuickSetting(detail, { solo }): optional; a 5-fret lane's quick settings change
+//   (five_fret:quick-setting) on this session's lane, for the caller to save.
+//   now: the clock for session ids (default Date.now).
 //   -> { dispose(), isMounted(), startSession({ song, prefs }): false | Promise<true>, phase(),
 //        snapshot(): the current session's band score snapshot, or null,
 //        overdrive(): its overdrive meters (overdrive-session snapshot), or null,
@@ -139,7 +150,7 @@ function withoutVocals(prefs) {
 export function createBandRuntime({
     win, doc, mountStage, loadPrefs, storage = win.localStorage, fetchJson,
     setTimer = win.setTimeout, clearTimer = win.clearTimeout, deviceMemo = {}, onShowBandScreen,
-    kinds = CONTROLLER_KINDS, audioFactory,
+    kinds = CONTROLLER_KINDS, audioFactory, adopt, onShowSoloScreen, onQuickSetting, now = Date.now,
 }) {
     const fb = win.feedBack;
     const getJson = fetchJson || ((url) => win.fetch(url).then((r) => r.json()));
@@ -148,6 +159,10 @@ export function createBandRuntime({
     void loadPrefs;
 
     let state = initialSession();
+    // Session ids (play:* events) and the adopt in flight: a song change, a stop or
+    // a started session drops a pending adopt (its generation moves on).
+    let sessionCount = 0;
+    let adoptGen = 0;
     // Per-session runtime data the pure reducer does not hold.
     let session = null;
     let stage = null;
@@ -181,7 +196,7 @@ export function createBandRuntime({
         return slider ? masteryFromPct(parseFloat(slider.value)) : null;
     }
 
-    function newSession(item, prefs, goPrefs) {
+    function newSession(item, prefs, goPrefs, { solo = false, adopted = false } = {}) {
         const guitarOn = isOn(prefs, 'guitar');
         const drumsOnly = !guitarOn && isOn(prefs, 'drums');
         const drumIndex = drumsOnly ? drumArrIndex(item.arrangements, { hasDrumTab: songFacts(item).hasDrumTab }) : -1;
@@ -189,6 +204,16 @@ export function createBandRuntime({
             item, prefs,
             // The prefs Go was given (Play again replays with them).
             goPrefs,
+            // Play layer (contract §2, §3): the play:* session id, a one-player
+            // session (playSolo or adopted), a plain play adopted (its song was
+            // already loading), the arrangement the song loaded on (read at mount),
+            // whether play:result went out, and whether the band muted the pads.
+            sessionId: sessionIdFor(now(), ++sessionCount),
+            solo: solo || adopted,
+            adopted,
+            loadedArrangement: null,
+            resultSent: false,
+            padsMuted: false,
             // The guitar part's arrangement, with the Lead fallback.
             guitarIndex: guitarOn ? getPart('guitar').chartFrom(item, prefs.parts.guitar) : undefined,
             drumsOnly,
@@ -533,8 +558,72 @@ export function createBandRuntime({
     function record(s, entry) {
         if (!entry) return;
         s.score.record(entry);
+        emitJudgment(s, entry);
         refreshHud(s, false);
         syncFailures(s);
+    }
+
+    // play:judgment (contract §3) for every entry the ledger took (a part still in
+    // the band); a listener that throws never breaks scoring.
+    function emitJudgment(s, entry) {
+        if (typeof fb.emit !== 'function' || !s.scoreParts.includes(entry.part)) return;
+        const part = s.score.snapshot().parts[entry.part];
+        const detail = judgmentEvent({
+            filename: s.item.filename, sessionId: s.sessionId, entry,
+            info: playerInfo(entry.part, s.prefs), totals: part,
+        });
+        safe(() => fb.emit('play:judgment', detail));
+    }
+
+    // play:result (contract §3), once per session, when the results open.
+    function emitResult(s) {
+        if (s.resultSent || typeof fb.emit !== 'function') return;
+        s.resultSent = true;
+        const arrangements = {};
+        for (const id of s.scoreParts) {
+            if (id === 'vocals') continue;
+            if (id === 'guitar' && Number.isInteger(s.guitarIndex)) arrangements[id] = s.guitarIndex;
+            else if (Number.isInteger(s.loadedArrangement)) arrangements[id] = s.loadedArrangement;
+        }
+        const detail = resultEvent({
+            filename: s.item.filename, sessionId: s.sessionId,
+            snapshot: s.score ? s.score.snapshot() : null, prefs: s.prefs, arrangements,
+            practice: false, durationSec: displayTime(s),
+        });
+        safe(() => fb.emit('play:result', detail));
+    }
+
+    // The drums players' sound modes (the real drummer, drums controllers).
+    function drumModes(s) {
+        const modes = [];
+        if (s.scoreParts.includes('drums')) modes.push(s.prefs.parts.drums.soundMode);
+        for (const id of s.scoreParts) {
+            const c = isControllerId(id) ? s.prefs.controllers.find((x) => x.id === id) : null;
+            if (c && c.playsAs === 'drums') modes.push(c.soundMode);
+        }
+        return modes;
+    }
+
+    // Rock Band plays without pad sounds (contract §6): the drums plugin's pads are
+    // muted while every drums player is in Rock Band, and unmuted at teardown.
+    // setPadSound is feature-detected; an older drums plugin has window.__drumsMutePads.
+    function setPads(muted) {
+        const api = win.feedBackDrums;
+        if (api && typeof api.setPadSound === 'function') { safe(() => api.setPadSound({ muted })); return true; }
+        if (!api) return false;
+        win.__drumsMutePads = muted;
+        return true;
+    }
+
+    function startPadSound(s) {
+        if (s.padsMuted || !s.score || !padsMuted(drumModes(s))) return;
+        s.padsMuted = setPads(true);
+    }
+
+    function releasePadSound(s) {
+        if (!s.padsMuted) return;
+        s.padsMuted = false;
+        setPads(false);
     }
 
     // The stem ids of the song playing (stems' own list).
@@ -624,7 +713,14 @@ export function createBandRuntime({
         if (s.stemSound || !s.score) return;
         const ids = songStemIds();
         const members = s.scoreParts.map((id) => {
-            if (!isControllerId(id)) return { id, stemId: stemIdFor(id, s.prefs.parts[id], ids), controller: false };
+            if (!isControllerId(id)) {
+                const stemId = stemIdFor(id, s.prefs.parts[id], ids);
+                // The real drummer in Rock Band with no drum stem shares the full mix's drop-outs.
+                if (id === 'drums' && !stemId && s.prefs.parts.drums.soundMode === 'rockband') {
+                    return { id, stemId, controller: false, dropout: true, mode: 'rockband' };
+                }
+                return { id, stemId, controller: false };
+            }
             const c = s.prefs.controllers.find((x) => x.id === id);
             if (!c) return null;
             return { id, stemId: stemIdFor(kindFor(s.prefs, c.key), c, ids), controller: true, mode: controllerStemMode(s, id) };
@@ -809,6 +905,7 @@ export function createBandRuntime({
                 startOverdrive(s);
                 startDrumSound(s);
                 startStemSound(s);
+                startPadSound(s);
                 // Splitscreen was still up at song:ready, so vocals had no
                 // strip slot then: start them now the stage is up.
                 if (s.vocals && !s.vocalsStarted && !s.vocalsFailed) EFFECTS.startVocals(s);
@@ -1137,6 +1234,8 @@ export function createBandRuntime({
             let arrIndex;
             if (isOn(s.prefs, 'guitar')) arrIndex = s.guitarIndex;
             else if (s.drumsOnly && s.drumIndex >= 0) arrIndex = s.drumIndex;
+            // Play again on an adopted play: the arrangement it was playing.
+            if (arrIndex === undefined && Number.isInteger(s.replayArrangement)) arrIndex = s.replayArrangement;
             safe(() => fb.setReturnScreen(BAND_SCREEN));
             s.setReturn = true;
             // Splitscreen's playSong wrapper auto-starts from this pref; a band
@@ -1166,6 +1265,7 @@ export function createBandRuntime({
                 s.controllersSettled = true;
                 s.prefs = settleControllers(s.prefs, s.connected);
             }
+            if (Number.isInteger(song.arrangementIndex)) s.loadedArrangement = song.arrangementIndex;
             const plan = planStage(song, s.prefs.parts, s.prefs.controllers);
             // Every session with a playable lane or the strip has a stage (R10).
             if (!plan.strip && plan.lanes.length === 0) return;
@@ -1237,6 +1337,7 @@ export function createBandRuntime({
             startOverdrive(s);
             startDrumSound(s);
             startStemSound(s);
+            startPadSound(s);
         },
         applyDevices(s) {
             Promise.resolve()
@@ -1299,6 +1400,7 @@ export function createBandRuntime({
         showResults(s) {
             const player = doc.getElementById('player');
             if (s.results) return;
+            emitResult(s);
             // The sidebar is for the playing song only (plan 7 R21).
             if (s.sidebar) { const sb = s.sidebar; safe(() => sb.close()); }
             // So are Settings and the leave prompt: closed, resuming nothing.
@@ -1403,6 +1505,7 @@ export function createBandRuntime({
             for (const id of [...s.stemClaims]) restoreFailedStem(s, id);
             releaseDrumSound(s);
             releaseStemSound(s);
+            releasePadSound(s);
         },
         releaseExit() {
             const r = release;
@@ -1416,6 +1519,12 @@ export function createBandRuntime({
             }
             if (!(s && s.autoNext)) safe(() => onShowBandScreen && onShowBandScreen());
         },
+        // Next song after a solo session (contract §2): the Solo screen; without
+        // that hook, the band screen as before.
+        showSoloScreen(s) {
+            if (typeof onShowSoloScreen !== 'function') { EFFECTS.showBandScreen(s); return; }
+            safe(() => onShowSoloScreen({ next: !(s && s.autoNext) }));
+        },
         // Play again: teardown left the plugins' displays hidden, so the
         // replayed session takes them over (no flash of their own HUDs).
         keepHides(s) {
@@ -1424,7 +1533,8 @@ export function createBandRuntime({
         // Play again: the same library item with the prefs Go was given, through
         // the normal Go path. Always the last effect: the session is idle by now.
         replay(s) {
-            const started = begin(s.item, s.goPrefs, s.keepHides ? s.hidden : null);
+            const started = begin(s.item, s.goPrefs, s.keepHides ? s.hidden : null,
+                { solo: s.solo, replayArrangement: s.adopted ? s.loadedArrangement : null });
             // Refused: nothing took the hides over, so they're undone here,
             // and nothing keeps the full screen the session before asked for.
             if (!started && s.keepHides) undoHides(s);
@@ -1456,18 +1566,22 @@ export function createBandRuntime({
         }
     }
 
-    function startSession({ song, prefs } = {}) {
-        return begin(song, prefs, null);
+    // solo: a one-player session (playSolo), whose Next song goes to the Solo screen.
+    function startSession({ song, prefs, solo = false } = {}) {
+        return begin(song, prefs, null, { solo: solo === true });
     }
 
     // hidden: the hides a replayed session inherits (undone at its teardown).
-    function begin(song, prefs, hidden) {
+    // replayArrangement: Play again on an adopted play loads the arrangement it played.
+    function begin(song, prefs, hidden, { solo = false, replayArrangement = null } = {}) {
         if (state.phase !== 'idle' || !song || !song.filename) return false;
-        const s = newSession(song, effectivePrefs(sessionPrefs(prefs, song), song, win, kinds), prefs);
+        adoptGen++;
+        const s = newSession(song, effectivePrefs(sessionPrefs(prefs, song), song, win, kinds), prefs, { solo });
+        s.replayArrangement = replayArrangement;
         if (hidden) s.hidden = hidden;
         session = s;
         lanes.readConnected(s);
-        dispatch({ type: 'go', filename: song.filename });
+        dispatch({ type: 'go', filename: song.filename, solo });
         if (state.phase === 'idle') return false;
         // Inside the Go (or Play again) click, so the request has user activation.
         if (s.full) safe(() => fullScreen.request());
@@ -1483,19 +1597,55 @@ export function createBandRuntime({
         });
     }
 
+    // Adopting a plain play (contract §2): a song ready outside a session asks
+    // `adopt` what it becomes; the answer applies only if nothing moved on meanwhile
+    // (no other song, no stop, no session started). Splitscreen plays are left alone.
+    function maybeAdopt(detail) {
+        if (typeof adopt !== 'function' || state.phase !== 'idle' || session || splitActive()) return;
+        const song = fb.currentSong;
+        if (!song || typeof song.filename !== 'string' || !song.filename) return;
+        const gen = ++adoptGen;
+        Promise.resolve().then(() => adopt(song)).then((prefs) => {
+            if (!prefs || gen !== adoptGen || state.phase !== 'idle' || session) return;
+            const cur = fb.currentSong;
+            if (!cur || cur.filename !== song.filename) return;
+            beginAdopted(song, prefs, detail);
+        }, (e) => console.warn('[rockherosmith] adopting the song failed', e));
+    }
+
+    function beginAdopted(song, prefs, detail) {
+        const s = newSession(song, effectivePrefs(sessionPrefs(prefs, song, songStemIds()), song, win, kinds), prefs, { adopted: true });
+        // The song already shows on the drum view; the band never switches it.
+        s.drumView = false;
+        s.readyDetail = detail;
+        // An adopted play counts in with core's own count-in (it already ran).
+        session = s;
+        lanes.readConnected(s);
+        dispatch({ type: 'adopt', filename: song.filename });
+    }
+
     const handlers = {
-        'song:loading': () => dispatch({ type: 'loading' }),
+        'song:loading': () => { adoptGen++; dispatch({ type: 'loading' }); },
         'song:ready': (e) => {
             const detail = (e && e.detail) || {};
+            if (state.phase === 'idle' && !session) { maybeAdopt(detail); return; }
             if (session) session.readyDetail = detail;
             const cur = fb.currentSong;
             dispatch({ type: 'ready', filename: cur && cur.filename, hasPhraseData: !!detail.hasPhraseData });
         },
         'song:ended': () => dispatch({ type: 'ended' }),
-        'song:stop': () => dispatch({ type: 'left' }),
+        'song:stop': () => { adoptGen++; dispatch({ type: 'left' }); },
         'screen:changing': (e) => {
             const d = (e && e.detail) || {};
-            if (d.from === 'player' && d.id !== 'player') dispatch({ type: 'left' });
+            if (d.from === 'player' && d.id !== 'player') { adoptGen++; dispatch({ type: 'left' }); }
+        },
+        // A 5-fret lane's quick settings change on this session's lane (A4): the
+        // caller saves it (a band controller's entry, or the Solo choices).
+        'five_fret:quick-setting': (e) => {
+            const s = session;
+            const d = e && e.detail;
+            if (!s || !d || typeof onQuickSetting !== 'function' || !lanes.laneOwner(s, d.canvas)) return;
+            safe(() => onQuickSetting(d, { solo: s.solo }));
         },
         // Band mode and splitscreen never run at once. Armed or playing,
         // splitscreen is stopped and the stage comes back; while ending, the
@@ -1520,11 +1670,28 @@ export function createBandRuntime({
         // include the drums engine's own star-power doubling.
         record(s, drumsEntry(type, e && e.detail, displayTime(s), canvas));
         const d = e && e.detail;
-        if (!s.drumSound || !d || !canvas || d.canvas !== canvas) return;
+        if (!d || !canvas || d.canvas !== canvas || !s.scoreParts.includes('drums')) return;
         if (type === 'overhit' && songPaused(s)) return;
-        if (s.drumSound.judge(type)) syncDrumSound(s);
+        if (s.drumSound && s.drumSound.judge(type)) syncDrumSound(s);
+        // Rock Band with no drum stem: the full mix drops out, and a miss clunks
+        // (the pads are silent), as for a Rock Band controller (contract §6).
+        if (s.stemSound && s.stemSound.stems().includes(FULL_MIX) && s.prefs.parts.drums.soundMode === 'rockband') {
+            if (CLUNK_JUDGMENTS.includes(type) && s.prefs.missSound !== false && !s.failed.has('drums')) safe(() => missSound.play());
+            syncStemSound(s, s.stemSound.judge('drums', type));
+        }
     };
     for (const type of DRUM_JUDGMENTS) handlers['drums:' + type] = drumHandler(type);
+    // A drum solo's bonus (contract §4): points only, on the real drummer's canvas
+    // or a drums controller's lane.
+    handlers['drums:bonus'] = (e) => {
+        const s = scoring();
+        const d = e && e.detail;
+        if (!s || !d || !d.canvas) return;
+        const canvas = bandDrumCanvas(s);
+        if (canvas && d.canvas === canvas) { record(s, drumsBonusEntry(d, displayTime(s), canvas)); return; }
+        const id = lanes.laneOwner(s, d.canvas);
+        if (id) record(s, drumsBonusEntry(d, displayTime(s), d.canvas, id));
+    };
     // Deploys (R18): drums star power on the band's drum canvas, karaoke's overdrive.
     // A dropped-out part's deploy is recorded but ignored by the ledger (R12), so its
     // greyed lane gets no OVERDRIVE! callout.
@@ -1659,6 +1826,9 @@ export function createBandRuntime({
 
     return {
         dispose() {
+            // A pending adopt never lands on a disposed runtime.
+            adoptGen++;
+            adopt = null;
             dispatch({ type: 'left' });
             for (const [ev, fn] of Object.entries(handlers)) fb.off(ev, fn);
             if (winEvents) for (const [ev, fn] of Object.entries(winHandlers)) safe(() => win.removeEventListener(ev, fn));

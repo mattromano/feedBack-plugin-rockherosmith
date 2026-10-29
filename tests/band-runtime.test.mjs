@@ -56,7 +56,7 @@ const DRUM_ITEM = { filename: 'Beat.sloppak', arrangements: [{ index: 0, name: '
 function setup({ slider = '80', storageInit = { splitscreenActive: 'true' }, settings = { master_difficulty: 60 },
     karaoke = true, karaokePitch = true, mountFails = false, drumLane = true,
     stems = ['guitar', 'drums'], caps = true, pauseStatus = 'paused', overlayApi = true, confirmDialog = true,
-    onShowBandScreen, fiveFret = true, pads = ['Xbox#1', 'Xbox#2'], drumPads = ['Kit#1', 'Kit#2'] } = {}) {
+    onShowBandScreen, fiveFret = true, pads = ['Xbox#1', 'Xbox#2'], drumPads = ['Kit#1', 'Kit#2'], runtimeOpts = {} } = {}) {
     const bus = new EventTarget();
     const calls = { playSong: [], showScreen: [], setReturnScreen: [], hold: 0, release: 0, setMastery: [],
         setDifficulty: [], clearDifficulty: [], splitStart: 0, fetch: [], setViz: [],
@@ -313,7 +313,7 @@ function setup({ slider = '80', storageInit = { splitscreenActive: 'true' }, set
     const timers = manualTimers();
     const fetchJson = async (url) => { calls.fetch.push(url); return settings; };
     const makeRuntime = () => createBandRuntime({ win, doc, mountStage, loadPrefs: () => prefsWith(), storage, fetchJson,
-        setTimer: timers.setTimer, clearTimer: timers.clearTimer, onShowBandScreen, kinds });
+        setTimer: timers.setTimer, clearTimer: timers.clearTimer, onShowBandScreen, kinds, ...runtimeOpts });
     const rt = makeRuntime();
 
     // Core's playSong side: loading, then the song becomes current and is ready.
@@ -4757,5 +4757,262 @@ test('a real part beside the controller on an unsplit song keeps the mix', async
     env.fb.emit('five_fret:miss', ffEv(env.mounts[0].ctlCanvas.ctl1, { combo: 0 }));
     await flush();
     assert.equal(env.audio.volume, 0.8);
+    env.rt.dispose();
+});
+
+// ---- Play layer (contract §2, §3, §4, §6) ----
+
+// Kit solo: the real drummer alone on #highway (no controllers).
+const kitSolo = (drums = {}) => ({ ...prefsWith({ guitar: { on: false }, drums: { soundMode: 'song', ...drums } }), controllers: [] });
+// Records the core bus's play:* events.
+function playEvents(fb) {
+    const got = { judgment: [], result: [] };
+    fb.on('play:judgment', (e) => got.judgment.push(e.detail));
+    fb.on('play:result', (e) => got.result.push(e.detail));
+    return got;
+}
+
+test('play:judgment for every ledger entry, with the session id and who played', () => {
+    const env = setup();
+    const { rt, fb, loadSong, highwayCanvas, clock } = env;
+    const got = playEvents(fb);
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo({ difficulty: 'expert' }), solo: true });
+    loadSong(DRUM_ITEM);
+    clock.t = 4;
+    fb.emit('drums:hit', drEv(highwayCanvas, { points: 50, combo: 3, multiplier: 2 }));
+    fb.emit('drums:miss', drEv(highwayCanvas, { combo: 0 }));
+    // Another canvas's judgment is not the band's: no entry, no event.
+    fb.emit('drums:hit', drEv(env.doc.createElement('canvas'), { points: 50 }));
+    assert.equal(got.judgment.length, 2);
+    const [hit, miss] = got.judgment;
+    assert.deepEqual(hit, { filename: DRUM_ITEM.filename, sessionId: hit.sessionId, player: 'drums', instrument: 'drums',
+        part: 'drums', input: 'kit', kind: 'hit', points: 50, multiplier: 2, streak: 3, t: 4, noteTime: null });
+    assert.equal(typeof hit.sessionId, 'string');
+    assert.equal(miss.kind, 'miss');
+    assert.equal(miss.sessionId, hit.sessionId);
+    rt.dispose();
+});
+
+test('play:result once when the results open, never on leaving mid-song; a new session id each session', async () => {
+    const env = setup();
+    const { rt, fb, loadSong, highwayCanvas, clock } = env;
+    const got = playEvents(fb);
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo({ difficulty: 'hard' }), solo: true });
+    loadSong(DRUM_ITEM);
+    fb.emit('drums:hit', drEv(highwayCanvas, { points: 100, combo: 1 }));
+    clock.t = 200;
+    fb.emit('song:ended', {});
+    assert.equal(got.result.length, 1);
+    const r = got.result[0];
+    assert.deepEqual([r.filename, r.band, r.practice, r.durationSec], [DRUM_ITEM.filename, false, false, 200]);
+    assert.equal(r.sessionId, got.judgment[0].sessionId);
+    assert.equal(r.players.length, 1);
+    const p = r.players[0];
+    assert.deepEqual([p.player, p.instrument, p.part, p.input, p.difficulty, p.hits, p.misses, p.accuracy, p.fullCombo, p.arrangement],
+        ['drums', 'drums', 'drums', 'kit', 'hard', 1, 0, 1, true, null]);
+    assert.deepEqual(p.sections, []);
+    rt.again();
+    await flush();
+    loadSong(DRUM_ITEM);
+    fb.emit('drums:hit', drEv(highwayCanvas, { points: 100, combo: 1 }));
+    assert.notEqual(got.judgment[1].sessionId, r.sessionId, 'Play again is a new session');
+    fb.emit('song:stop', {});
+    assert.equal(got.result.length, 1, 'leaving mid-song sends no result');
+    rt.dispose();
+});
+
+test('drums:bonus scores points only, on the real drummer and on a drums controller lane', async () => {
+    const env = setup();
+    const { rt, fb, loadSong, highwayCanvas } = env;
+    const got = playEvents(fb);
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    fb.emit('drums:hit', drEv(highwayCanvas, { points: 100, combo: 5, multiplier: 2 }));
+    fb.emit('drums:bonus', { canvas: highwayCanvas, points: 1500, reason: 'solo' });
+    const d = rt.snapshot().parts.drums;
+    assert.deepEqual([d.score, d.streak, d.hits], [1600, 5, 1]);
+    assert.deepEqual([got.judgment[1].kind, got.judgment[1].points, got.judgment[1].streak], ['bonus', 1500, 5]);
+    rt.dispose();
+    const c = setup();
+    await goCtl(c, padPrefs([KIT1], noRealDrums), DRUM_ITEM);
+    c.fb.emit('drums:bonus', { canvas: c.mounts[0].ctlCanvas.ctl1, points: 700, reason: 'solo' });
+    assert.equal(c.rt.snapshot().parts.ctl1.score, 700);
+    c.rt.dispose();
+});
+
+test('Rock Band mutes the drums pads for the session; other modes leave them', async () => {
+    const env = setup();
+    const pads = [];
+    env.win.feedBackDrums.setPadSound = (o) => { pads.push(o); return { muted: !!o.muted, volume: 1 }; };
+    env.rt.startSession({ song: STEM_ITEM, prefs: kitSolo({ soundMode: 'rockband' }), solo: true });
+    env.loadSong(STEM_ITEM);
+    assert.deepEqual(pads, [{ muted: true }]);
+    env.fb.emit('song:stop', {});
+    assert.deepEqual(pads, [{ muted: true }, { muted: false }]);
+    env.rt.dispose();
+    const song = setup();
+    const p2 = [];
+    song.win.feedBackDrums.setPadSound = (o) => { p2.push(o); return o; };
+    song.rt.startSession({ song: STEM_ITEM, prefs: kitSolo({ soundMode: 'song' }), solo: true });
+    song.loadSong(STEM_ITEM);
+    song.fb.emit('song:stop', {});
+    assert.deepEqual(p2, []);
+    song.rt.dispose();
+    // A drums controller in Rock Band mutes them too.
+    const ctl = setup();
+    const p3 = [];
+    ctl.win.feedBackDrums.setPadSound = (o) => { p3.push(o); return o; };
+    await goCtl(ctl, padPrefs([KIT1], noRealDrums), DRUM_ITEM);
+    assert.deepEqual(p3, [{ muted: true }]);
+    ctl.rt.dispose();
+    assert.deepEqual(p3, [{ muted: true }, { muted: false }]);
+});
+
+test('without setPadSound, Rock Band falls back to window.__drumsMutePads', () => {
+    const env = setup();
+    env.rt.startSession({ song: STEM_ITEM, prefs: kitSolo({ soundMode: 'rockband' }), solo: true });
+    env.loadSong(STEM_ITEM);
+    assert.equal(env.win.__drumsMutePads, true);
+    env.fb.emit('song:stop', {});
+    assert.equal(env.win.__drumsMutePads, false);
+    env.rt.dispose();
+});
+
+test('the real drummer in Rock Band on an unsplit song muffles the full mix on a miss', async () => {
+    const { env } = unsplit();
+    const item = { ...DRUM_ITEM };
+    env.rt.startSession({ song: item, prefs: kitSolo({ soundMode: 'rockband' }), solo: true });
+    env.loadSong(item);
+    assert.equal(env.mounts[0].prefs.parts.drums.soundMode, 'rockband');
+    env.fb.emit('drums:miss', drEv(env.highwayCanvas, { combo: 0 }));
+    assert.ok(dipped(env), `dipped (${env.audio.volume})`);
+    env.fb.emit('drums:hit', drEv(env.highwayCanvas, { points: 10 }));
+    await flush();
+    assert.equal(env.audio.volume, 0.8);
+    env.rt.dispose();
+});
+
+// Adopt: a plain play on the drum view (core loads the song itself).
+function adoptEnv({ adoptPrefs = kitSolo(), onShowSoloScreen, onQuickSetting } = {}) {
+    const asked = [];
+    const shown = [];
+    const env = setup({ runtimeOpts: {
+        adopt: (song) => { asked.push(song.filename); return Promise.resolve(adoptPrefs); },
+        onShowSoloScreen: onShowSoloScreen || ((o) => shown.push(o)),
+        onQuickSetting,
+    } });
+    return { env, asked, shown };
+}
+
+test('a plain play outside a session is adopted: playing at once, no playSong, stage and HUD up', async () => {
+    const { env, asked } = adoptEnv();
+    const { rt, calls, mounts, loadSong, fb, highwayCanvas } = env;
+    loadSong(DRUM_ITEM);
+    assert.equal(rt.phase(), 'idle');
+    await flush();
+    assert.deepEqual(asked, [DRUM_ITEM.filename]);
+    assert.equal(rt.phase(), 'playing');
+    assert.deepEqual(calls.playSong, []);
+    assert.deepEqual(calls.setReturnScreen, []);
+    assert.equal(mounts.length, 1);
+    fb.emit('drums:hit', drEv(highwayCanvas, { points: 10, combo: 1 }));
+    assert.equal(rt.snapshot().parts.drums.hits, 1);
+    // The drum view is the user's: the band never switches it.
+    assert.deepEqual(calls.setViz, []);
+    fb.emit('song:stop', {});
+    assert.equal(rt.phase(), 'idle');
+    assert.equal(mounts[0].unmounted, 1);
+    rt.dispose();
+});
+
+test('adopted results: Next song goes to the Solo screen; Play again replays as a solo session', async () => {
+    const { env, shown } = adoptEnv();
+    const { rt, calls, loadSong, fb } = env;
+    loadSong(DRUM_ITEM);
+    await flush();
+    fb.emit('song:ended', {});
+    rt.next();
+    assert.deepEqual(shown, [{ next: true }]);
+    assert.equal(calls.release, 1);
+    assert.equal(calls.showScreen.includes('plugin-rockherosmith'), false);
+    // Play again on an adopted play goes through playSong (the drum arrangement).
+    loadSong(DRUM_ITEM);
+    await flush();
+    fb.emit('song:ended', {});
+    rt.again();
+    assert.deepEqual(calls.playSong, [['Beat.sloppak', 1]]);
+    loadSong(DRUM_ITEM);
+    fb.emit('song:ended', {});
+    rt.next();
+    assert.equal(shown.length, 2, 'the replay is still solo');
+    rt.dispose();
+});
+
+test('playSolo sessions go to the Solo screen; band sessions to the band screen', () => {
+    const { env, shown } = adoptEnv();
+    const { rt, loadSong, fb } = env;
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    fb.emit('song:ended', {});
+    rt.next();
+    assert.equal(shown.length, 1);
+    rt.startSession({ song: DRUM_ITEM, prefs: prefsWith() });
+    loadSong(DRUM_ITEM);
+    fb.emit('song:ended', {});
+    rt.next();
+    assert.equal(shown.length, 1);
+    assert.ok(env.calls.showScreen.includes('plugin-rockherosmith'));
+    rt.dispose();
+});
+
+test('no adopt: off (null prefs), no hook, a song change or stop before it answers, or a dispose', async () => {
+    const off = adoptEnv({ adoptPrefs: null });
+    off.env.loadSong(DRUM_ITEM);
+    await flush();
+    assert.equal(off.env.rt.phase(), 'idle');
+    off.env.rt.dispose();
+    const none = setup();
+    none.loadSong(DRUM_ITEM);
+    await flush();
+    assert.equal(none.rt.phase(), 'idle');
+    none.rt.dispose();
+    const moved = adoptEnv();
+    moved.env.loadSong(DRUM_ITEM);
+    moved.env.fb.emit('song:loading', { filename: 'other.psarc' });
+    await flush();
+    assert.equal(moved.env.rt.phase(), 'idle');
+    moved.env.rt.dispose();
+    const stopped = adoptEnv();
+    stopped.env.loadSong(DRUM_ITEM);
+    stopped.env.fb.emit('song:stop', {});
+    await flush();
+    assert.equal(stopped.env.rt.phase(), 'idle');
+    stopped.env.rt.dispose();
+    const gone = adoptEnv();
+    gone.env.loadSong(DRUM_ITEM);
+    gone.env.rt.dispose();
+    await flush();
+    assert.equal(gone.env.rt.phase(), 'idle');
+    assert.equal(gone.env.mounts.length, 0);
+});
+
+test('a song RockHeroSmith started is never adopted', async () => {
+    const { env, asked } = adoptEnv();
+    env.rt.startSession({ song: DRUM_ITEM, prefs: prefsWith() });
+    env.loadSong(DRUM_ITEM);
+    await flush();
+    assert.deepEqual(asked, []);
+    assert.equal(env.mounts.length, 1);
+    env.rt.dispose();
+});
+
+test('five_fret:quick-setting on a session lane reaches onQuickSetting with solo', async () => {
+    const got = [];
+    const { env } = adoptEnv({ onQuickSetting: (d, o) => got.push([d.key, d.value, o.solo]) });
+    await goCtl(env);
+    const canvas = env.mounts[0].ctlCanvas.ctl1;
+    env.fb.emit('five_fret:quick-setting', { canvas, controllerKey: 'Xbox#1', key: 'difficulty', value: 'hard', lane: true });
+    env.fb.emit('five_fret:quick-setting', { canvas: env.doc.createElement('canvas'), key: 'difficulty', value: 'easy', lane: true });
+    assert.deepEqual(got, [['difficulty', 'hard', false]]);
     env.rt.dispose();
 });

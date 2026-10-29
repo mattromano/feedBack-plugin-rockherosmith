@@ -168,18 +168,36 @@ test('playSolo controller solos are solo sessions', async () => {
     assert.equal(calls[0][1].solo, true);
 });
 
-test('soloKindFor: kit with a connected MIDI input, else drums with a connected game controller, else null', () => {
+test('soloKindFor: kit with a connected MIDI input, else drums with a connected game controller, else null', async () => {
     const gp = (connected) => ({ feedBack: { gamepadInput: { version: 1, list: () => [{ id: 'pad', connected }] } } });
     const midi = (connected) => ({ midiInput: () => ({ key: 'k', name: 'k', connected }) });
-    assert.equal(soloKindFor(DRUMS_ITEM, { win: { ...gp(true), feedBackDrums: midi(true) } }), 'kit');
-    assert.equal(soloKindFor(DRUMS_ITEM, { win: { ...gp(true), feedBackDrums: midi(false) } }), 'drums');
-    assert.equal(soloKindFor(DRUMS_ITEM, { win: { ...gp(false), feedBackDrums: midi(false) } }), null);
-    assert.equal(soloKindFor(DRUMS_ITEM, { win: { feedBackDrums: { midiInput: () => null } } }), null);
+    assert.equal(await soloKindFor(DRUMS_ITEM, { win: { ...gp(true), feedBackDrums: midi(true) } }), 'kit');
+    assert.equal(await soloKindFor(DRUMS_ITEM, { win: { ...gp(true), feedBackDrums: midi(false) } }), 'drums');
+    assert.equal(await soloKindFor(DRUMS_ITEM, { win: { ...gp(false), feedBackDrums: midi(false) } }), null);
+    assert.equal(await soloKindFor(DRUMS_ITEM, { win: { feedBackDrums: { midiInput: () => null } } }), null);
     // No drums plugin, or a song without drums: null.
-    assert.equal(soloKindFor(DRUMS_ITEM, { win: gp(true) }), null);
-    assert.equal(soloKindFor({ filename: 'g', arrangements: [{ index: 0, name: 'Lead' }] }, { win: { ...gp(true), feedBackDrums: midi(true) } }), null);
+    assert.equal(await soloKindFor(DRUMS_ITEM, { win: gp(true) }), null);
+    assert.equal(await soloKindFor({ filename: 'g', arrangements: [{ index: 0, name: 'Lead' }] }, { win: { ...gp(true), feedBackDrums: midi(true) } }), null);
     // No song given: the inputs alone decide.
-    assert.equal(soloKindFor(undefined, { win: { feedBackDrums: midi(true) } }), 'kit');
+    assert.equal(await soloKindFor(undefined, { win: { feedBackDrums: midi(true) } }), 'kit');
+});
+
+test('soloKindFor and kit playSolo wait for the drums MIDI discovery', async () => {
+    let connected = false;
+    const drums = {
+        midiInput: () => ({ key: 'TD-17', name: 'TD-17', connected }),
+        whenMidiReady: () => new Promise((r) => setTimeout(() => { connected = true; r(); }, 5)),
+    };
+    assert.equal(await soloKindFor(DRUMS_ITEM, { win: { feedBackDrums: drums } }), 'kit');
+    // A rejecting whenMidiReady still answers.
+    const bad = { midiInput: () => ({ key: 'k', connected: true }), whenMidiReady: () => Promise.reject(new Error('x')) };
+    assert.equal(await soloKindFor(DRUMS_ITEM, { win: { feedBackDrums: bad } }), 'kit');
+    const { play, calls, win } = kitHarness({ midi: { key: 'TD-17', connected: false } });
+    let ready = false;
+    win.feedBackDrums.whenMidiReady = () => Promise.resolve().then(() => { ready = true; });
+    win.feedBackDrums.midiInput = () => (ready ? { key: 'TD-17', connected: true } : null);
+    assert.equal(await play(DRUMS_ITEM, { kind: 'kit' }), 'started');
+    assert.equal(calls[0][1].prefs.parts.drums.deviceKey, 'TD-17');
 });
 
 test('openSolo (stub until the Solo screen): the band screen, its song pick on next', () => {

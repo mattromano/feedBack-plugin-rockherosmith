@@ -77,6 +77,13 @@ export async function pickSoloController(kind, kinds = CONTROLLER_KINDS) {
     return pick ? { controllerKey: pick.controllerKey, name: pick.name || '' } : null;
 }
 
+// Waits for core's MIDI discovery (feedBackDrums.whenMidiReady, about 2 s at most):
+// before it, midiInput() reports the saved kit as not connected. Never rejects.
+async function midiReady(drums) {
+    if (!drums || typeof drums.whenMidiReady !== 'function') return;
+    try { await drums.whenMidiReady(); } catch (_) { /* ask midiInput anyway */ }
+}
+
 // The drums plugin's saved MIDI input ({ key, name, connected }), or null (none, or
 // a drums plugin without midiInput yet).
 function midiInput(drums) {
@@ -97,11 +104,13 @@ function anyGamepad(win) {
 // What the drums Play-as should use (contract §1): 'kit' when the drums plugin's
 // MIDI input is connected, else 'drums' when a game controller is connected (playSolo
 // then finds the drums one, or opens setup), else null. null too without the drums
-// plugin or when `song` (if given) has no drum chart.
-export function soloKindFor(song, { win = globalThis.window } = {}) {
+// plugin or when `song` (if given) has no drum chart. A Promise: it waits for the
+// drums plugin's MIDI discovery (whenMidiReady) first.
+export async function soloKindFor(song, { win = globalThis.window } = {}) {
     const drums = win && win.feedBackDrums;
     if (!drums) return null;
     if (song && !drumsChart(song)) return null;
+    await midiReady(drums);
     const m = midiInput(drums);
     if (m && m.connected) return 'kit';
     return anyGamepad(win) ? 'drums' : null;
@@ -137,6 +146,7 @@ export function createSoloPlay({ getRuntime, getScreen, loadPrefs, showScreen, w
         if (!playable(item, kind, opts.part, kinds)) return toSetup(item);
         let prefs;
         if (kind === 'kit') {
+            await midiReady(win && win.feedBackDrums);
             const m = midiInput(win && win.feedBackDrums);
             prefs = soloPrefs(loadPrefs(), { ...opts, deviceKey: m && typeof m.key === 'string' ? m.key : '' });
         } else {
@@ -216,6 +226,7 @@ export function createAdopt({ win, doc, loadPrefs, kinds = CONTROLLER_KINDS }) {
         const target = adoptTarget(win, doc);
         if (!target) return null;
         if (target.kind === 'drums') {
+            await midiReady(win.feedBackDrums);
             const m = midiInput(win.feedBackDrums);
             const kit = () => soloPrefs(saved, { kind: 'kit', deviceKey: m && typeof m.key === 'string' ? m.key : '' });
             if (m && m.connected) return kit();
