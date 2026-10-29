@@ -84,6 +84,13 @@ None of these does anything while a band song is playing.
 - **`M` and the sidebar.** `M`, the Menu button or (in full mode) the left edge open the app
   sidebar over the song, which keeps playing. Esc, a click outside it or leaving it (when
   the edge opened it) closes it. With the sidebar shut, Esc leaves the song as usual.
+- **Part settings mid-song.** **P**, or **Part** at the top of the sidebar, opens the Part
+  sheet over the song, which keeps playing: for each drummer (the real kit and drums
+  controllers) and each 5-Fret controller, that plugin's quick settings for its lane
+  (difficulty, auto kick and cymbals, pro cymbals, timing, input offset, pad volume; for
+  5-Fret part, lefty and offset). A drummer's **Sound** (Rock Band, Song + pads, Kit only)
+  switches at once and is saved for that player. Esc, P or Back to the song closes it;
+  with a pad, its arrows move through it and B closes it.
 - **Settings mid-song.** The sidebar's Settings pauses the song and shows Settings over it.
   Esc or "Back to the song" closes it, puts the band guitar difficulty back and resumes only
   what was playing. Any other sidebar item pauses and asks "Leave the song?": Stay resumes,

@@ -733,6 +733,66 @@ body.rhs-settings-over #settings .fb-settings-back { display: none; }
 #settings .rhs-settings-back:focus-visible { outline: 2px solid #4aa3ff; outline-offset: 3px; }
 /* ===== end Plan 7 Task 7 ===== */
 
+/* ===== B1: the stage menu's Part item and the in-song Part sheet ===== */
+#v3-sidebar .rhs-sidebar-item {
+    margin: 12px 12px 4px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: #222;
+    border: 1px solid #444;
+    color: #ecebf2;
+    font: 600 14px/1.2 'Barlow', system-ui, sans-serif;
+    text-align: left;
+    cursor: pointer;
+}
+#v3-sidebar .rhs-sidebar-item:hover { background: #2c2c34; }
+#v3-sidebar .rhs-sidebar-item:focus-visible { outline: 2px solid #4aa3ff; outline-offset: 2px; }
+/* Over the stage (it never pauses the song): above the chrome and count-in, below the results (50) and the sidebar (150). */
+#player .rhs-part-sheet {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    bottom: calc(var(--rhs-transport-h, 72px) + 16px);
+    width: min(440px, calc(100% - 32px));
+    z-index: 45;
+    overflow-y: auto;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: rgba(12, 12, 18, 0.94);
+    border: 1px solid #333;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+    color: #ecebf2;
+    font-family: 'Barlow', system-ui, sans-serif;
+}
+#player.rhs-full .rhs-part-sheet { bottom: 16px; }
+#player .rhs-part-sheet-head { display: flex; align-items: center; gap: 12px; }
+#player .rhs-part-sheet-title { margin: 0; font-size: 18px; font-weight: 700; }
+#player .rhs-part-sheet-close {
+    margin-left: auto;
+    padding: 6px 14px;
+    border-radius: 8px;
+    background: #222;
+    border: 1px solid #444;
+    color: #ecebf2;
+    font: 600 13px/1.2 'Barlow', system-ui, sans-serif;
+    cursor: pointer;
+}
+#player .rhs-part-sheet-close:hover { background: #2c2c34; }
+#player .rhs-part-sheet button:focus-visible,
+#player .rhs-part-sheet select:focus-visible,
+#player .rhs-part-sheet input:focus-visible { outline: 2px solid #4aa3ff; outline-offset: 2px; }
+#player .rhs-part-sheet-hint { margin: 4px 0 10px; font-size: 12px; color: #9a99a6; }
+#player .rhs-part-sheet-player {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border-left: 4px solid var(--rhs-c, #888);
+    background: rgba(255, 255, 255, 0.04);
+}
+#player .rhs-part-sheet-name { margin: 0 0 8px; font-size: 14px; font-weight: 700; }
+#player .rhs-part-sheet-note { margin: 0; font-size: 12px; color: #9a99a6; }
+/* ===== end B1 ===== */
+
 /* ===== Plan 9 Task 11: Home hero art and the library card bolt ===== */
 .rhs-hero {
     display: flex;
