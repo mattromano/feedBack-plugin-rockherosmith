@@ -15,10 +15,10 @@ import { icon } from './icons.js';
 import { createJoinManager } from './join.js';
 import { bandIsSetUp } from './main-mode.js';
 import { createControllerColumns } from './controller-columns.js';
+import { createPadVolume } from './pad-volume.js';
 import { CONTROLLER_KINDS, kindFor, joinController, leaveController, setPlaysAs, updateController } from './controller-model.js';
 
 const SCREEN_ID = 'plugin-rockherosmith';
-const SOUND_MODES_NEEDING_STEM = ['rockband', 'kit'];
 
 // Input devices and signal lights, per part. Lights are silent: meters read
 // an unconnected AnalyserNode, the pad light only listens to MIDI.
@@ -107,6 +107,7 @@ export function createBandScreen({
     let goError = '';
     const inputNote = {}; // part id -> device note (e.g. mic access needed)
     let mic = null; // the vocals mic-hit check: { block, slider, level, tick, light, text }
+    let padVolume = null; // the drums column's pad volume (pad-volume.js)
     let micDetector = null; // karaoke's shared detector, alive while the vocals meter runs
     let micFlashTimer = null;
     const isActive = () => {
@@ -213,7 +214,7 @@ export function createBandScreen({
 
     // The segment value shown and the values greyed out, from the column model.
     function segState(field, c, pp) {
-        if (field === 'soundMode') return [c.soundMode, c.soundModesDisabled ? SOUND_MODES_NEEDING_STEM : []];
+        if (field === 'soundMode') return [c.soundMode, c.soundModeDisabled || []];
         if (field === 'arrangement') {
             return [c.arrangement, Object.keys(c.arrangements).filter((n) => c.arrangements[n] === false)];
         }
@@ -246,6 +247,7 @@ export function createBandScreen({
             }
             renderDeviceLine(part.id);
         }
+        if (padVolume) padVolume.render();
         if (columns) columns.render(m.controllers);
         renderJoinSlot(status);
         renderMicHit();
@@ -800,6 +802,18 @@ export function createBandScreen({
         listen(select, 'change', () => pickDevice(part.id, select.value));
     }
 
+    // The drums plugin's pad volume beside the real drummer's sound mode (contract §4).
+    const drumRow = $('.rhs-part[data-part="drums"]');
+    const drumSound = drumRow && $('.rhs-seg[data-field="soundMode"]', drumRow);
+    if (drumSound && drumSound.parentNode && drumSound.parentNode.parentNode) {
+        padVolume = createPadVolume({ doc, win });
+        const soundField = drumSound.parentNode;
+        const row = soundField.parentNode;
+        const kids = [...row.children];
+        kids.splice(kids.indexOf(soundField) + 1, 0, padVolume.field);
+        row.replaceChildren(...kids);
+    }
+
     // Mic-hit sensitivity: the slider saves and retunes the live detector.
     const micBlock = $('.rhs-michit');
     if (micBlock) {
@@ -851,7 +865,7 @@ export function createBandScreen({
     }
 
     columns = createControllerColumns({
-        doc, setupHost: $('.rhs-ctlcols'), confirmHost: $('.rhs-ctlparts'),
+        doc, win, setupHost: $('.rhs-ctlcols'), confirmHost: $('.rhs-ctlparts'),
         onChange: (key, patch) => save({ controllers: updateController(prefs.controllers, key, patch) }),
         onLeave: (key) => {
             save({ controllers: leaveController(prefs.controllers, key) });

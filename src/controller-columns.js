@@ -7,16 +7,16 @@ import { icon } from './icons.js';
 import { FIVE_FRET_PART, DRUMS_CONTROLLER_PART } from './parts.js';
 import { FIVE_FRET_PART_LABELS } from './controller-model.js';
 import { DIFFICULTIES } from './mappings.js';
-import { DRUM_SOUND_MODES } from './drum-sound.js';
+import { DRUM_SOUND_MODE_LABELS, DRUM_SOUND_MODE_ORDER } from './drum-sound.js';
+import { createPadVolume } from './pad-volume.js';
 
 const DIFFICULTY_LABELS = { easy: 'Easy', medium: 'Medium', hard: 'Hard', expert: 'Expert' };
 const PART_ORDER = ['guitar', 'rhythm', 'bass'];
 const KIND_TAG = { chart: 'real', auto: 'auto' };
 const LEFTY = [['off', 'Off'], ['on', 'On']];
 const PART_AUDIO = [['rockband', 'Rock Band'], ['always', 'Always play']];
-// The real drums column's labels (screen.html).
-const SOUND_MODE_LABELS = { song: 'Song drums', rockband: 'Rock Band', kit: 'My kit only' };
-const SOUND_MODES = DRUM_SOUND_MODES.map((m) => [m, SOUND_MODE_LABELS[m]]);
+// The drum sound modes as every UI shows them (contract §6), as the real drums column does.
+const SOUND_MODES = DRUM_SOUND_MODE_ORDER.map((m) => [m, DRUM_SOUND_MODE_LABELS[m]]);
 const PLAYS_AS = [['five_fret', '5-Fret'], ['drums', 'Drums']];
 const PLAYS_AS_HINT = 'X: 5-Fret \u00b7 B: Drums';
 // Per kind: the Setup column's lights (the join manager's lit flags, CONTROLLER_KINDS
@@ -30,11 +30,12 @@ const LOOK = {
 };
 const NO_LIGHTS = [];
 
-// createControllerColumns({ doc, setupHost, confirmHost, onChange(key, patch), onLeave(key),
+// createControllerColumns({ doc, win, setupHost, confirmHost, onChange(key, patch), onLeave(key),
 //   onControls(key), onPlaysAs(key, kind) }) -> { render(rows), light(key, lit), destroy() }
+// win (optional): a drums row's pad volume reads and sets the drums plugin's (pad-volume.js).
 // light(key, lit) takes the join manager's reused lit flags for the kind the controller
 // plays as (null: all off) and writes only the classes that changed.
-export function createControllerColumns({ doc, setupHost, confirmHost, onChange, onLeave, onControls, onPlaysAs }) {
+export function createControllerColumns({ doc, win, setupHost, confirmHost, onChange, onLeave, onControls, onPlaysAs }) {
     const cards = new Map(); // key -> card (build)
     let order = [];
 
@@ -121,15 +122,16 @@ export function createControllerColumns({ doc, setupHost, confirmHost, onChange,
         const lefty = prefSeg(key, 'Lefty', 'lefty', LEFTY, (v) => v === 'on');
         const partAudio = prefSeg(key, 'Part audio', 'partAudio', PART_AUDIO);
         const soundMode = prefSeg(key, 'Sound', 'soundMode', SOUND_MODES);
+        const padVolume = createPadVolume({ doc, win });
         const rowNote = el('div', 'rhs-note');
         notes.push(rowNote);
 
         return {
             col, row, names, icos, notes, colTop, rowTop, colNote, rowNote, actions, lightBox, hint,
-            playsAsField: playsAs.field, partTags, partAlso, drumAlso,
+            playsAsField: playsAs.field, partTags, partAlso, drumAlso, padVolume,
             fields: {
                 five_fret: [part.field, difficulty.field, lefty.field, partAudio.field],
-                drums: [drumPart.field, difficulty.field, soundMode.field],
+                drums: [drumPart.field, difficulty.field, soundMode.field, padVolume.field],
                 none: [difficulty.field],
             },
             segs: {
@@ -213,6 +215,7 @@ export function createControllerColumns({ doc, setupHost, confirmHost, onChange,
             c.drumAlso.textContent = alsoText(parts.drums);
             const off = Array.isArray(r.soundModeDisabled) ? r.soundModeDisabled : NO_LIGHTS;
             press(c.segs.soundMode, r.soundMode, (m) => off.includes(m));
+            c.padVolume.render();
         }
     }
 

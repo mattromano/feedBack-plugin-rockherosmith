@@ -44,9 +44,10 @@ None of these does anything while a band song is playing.
   muffles the whole song instead. Part audio is greyed when a split song has no stem for
   the part.
 - **On Confirm, Drums:** the part is Drums ("also:" names the other drummers), then the
-  difficulty and the Sound: **Song drums**, **Rock Band** or **My kit only**, as for the
-  real drummer. Rock Band and My kit only are greyed when a split song has no drum stem
-  (on an unsplit song only My kit only is). With
+  difficulty, the Sound: **Rock Band**, **Song + pads** or **Kit only**, as for the real
+  drummer, and the drums plugin's **Pad volume** (one setting for every kit). Rock Band
+  and Kit only are greyed when a split song has no drum stem (on an unsplit song only
+  Kit only is, for the real drummer too: Rock Band muffles the whole song). With
   the real drummer on, the drummer's own sound mode sets the drum stem and the controller's
   Sound doesn't apply (the row says so). A song with no drum chart says "No drum chart for
   this song" and the controller sits out.

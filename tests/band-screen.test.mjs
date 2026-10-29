@@ -116,7 +116,8 @@ test('setSong stores lastSong + recentSongs, renders chips and greys what the so
     assert.ok(col('vocals').classList.contains('rhs-unavailable'));
     assert.equal(col('vocals').querySelector('.rhs-note').textContent, 'No vocal pitch for this song');
     assert.ok(part('vocals').classList.contains('rhs-unavailable'));
-    assert.equal(btn(part('drums'), 'soundMode', 'rockband').disabled, true);
+    // An unsplit song: Rock Band muffles the whole mix, Kit only has no stem.
+    assert.equal(btn(part('drums'), 'soundMode', 'rockband').disabled, false);
     assert.equal(btn(part('drums'), 'soundMode', 'kit').disabled, true);
     assert.equal(btn(part('drums'), 'soundMode', 'song').disabled, false);
     assert.equal(root.querySelector('.rhs-go').disabled, false);
@@ -774,7 +775,7 @@ test("a throwing karaoke detector doesn't stop the vocals meter", async () => {
     bs.dispose();
 });
 
-test('a song without a drum stem shows Song drums pressed and keeps the stored mode', () => {
+test('a song without a drum stem shows Song + pads pressed and keeps the stored mode', () => {
     const stored = { parts: { drums: { soundMode: 'kit' } } };
     const { part, btn, bs, prefs } = setup({ stored });
     bs.setSong(holiday);
@@ -1008,8 +1009,10 @@ test('Confirm greys what the song lacks', () => {
     assert.equal(btn(g, 'arrangement', 'Rhythm').disabled, false);
     assert.equal(btn(g, 'arrangement', 'Rhythm').getAttribute('aria-pressed'), 'true');
     assert.equal(btn(g, 'arrangement', 'Lead').getAttribute('aria-pressed'), 'false');
-    assert.equal(btn(part('drums'), 'soundMode', 'rockband').disabled, true);
+    assert.equal(btn(part('drums'), 'soundMode', 'rockband').disabled, false, 'unsplit: Rock Band muffles the mix');
     assert.equal(btn(part('drums'), 'soundMode', 'kit').disabled, true);
+    bs.setSong({ ...holiday, arrangements: [{ name: 'Rhythm', index: 0 }], stem_ids: ['guitar'] });
+    assert.equal(btn(part('drums'), 'soundMode', 'rockband').disabled, true, 'split, no drum stem');
     assert.ok(part('vocals').classList.contains('rhs-unavailable'));
     assert.equal(part('vocals').querySelector('.rhs-note').textContent, 'No vocal pitch for this song');
     bs.dispose();
@@ -1695,8 +1698,8 @@ test('drums Confirm row: difficulty and sound mode saved; modes greyed without a
     assert.equal(t.setupCols()[0].querySelector('.rhs-seg[data-field="playsAs"]'), null, 'a kit plays drums only');
     assert.equal(segBtn(row, 'drumPart', 'drums').querySelector('.rhs-also').textContent, 'also: Drums', 'the real drummer is on');
     assert.equal(segBtn(row, 'soundMode', 'rockband').getAttribute('aria-pressed'), 'true', 'default Rock Band');
-    assert.deepEqual(['song', 'rockband', 'kit'].map((v) => segBtn(row, 'soundMode', v).textContent),
-        ['Song drums', 'Rock Band', 'My kit only']);
+    assert.deepEqual(row.querySelector('.rhs-seg[data-field="soundMode"]').querySelectorAll('button').map((b) => [b.getAttribute('data-value'), b.textContent]),
+        [['rockband', 'Rock Band'], ['song', 'Song + pads'], ['kit', 'Kit only']]);
     segBtn(row, 'difficulty', 'expert').click();
     segBtn(row, 'soundMode', 'kit').click();
     let c = t.prefs().controllers[0];
@@ -1705,14 +1708,14 @@ test('drums Confirm row: difficulty and sound mode saved; modes greyed without a
     assert.equal(segBtn(row, 'difficulty', 'expert').getAttribute('aria-pressed'), 'true');
     assert.equal(segBtn(row, 'soundMode', 'kit').getAttribute('aria-pressed'), 'true');
     assert.equal(row.querySelector('.rhs-note').textContent, "The drummer's sound mode sets the drum stem", 'the real drummer is on');
-    // No drum stem: Rock Band and My kit only are greyed, Song drums plays, the stored mode stays.
+    // No drum stem: Rock Band and Kit only are greyed, Song + pads plays, the stored mode stays.
     t.bs.setSong({ ...drumSong, stem_ids: ['guitar'] });
     row = t.confirmRows()[0];
     assert.equal(segBtn(row, 'soundMode', 'rockband').disabled, true);
     assert.equal(segBtn(row, 'soundMode', 'kit').disabled, true);
     assert.equal(segBtn(row, 'soundMode', 'song').disabled, false);
     assert.equal(segBtn(row, 'soundMode', 'song').getAttribute('aria-pressed'), 'true');
-    assert.equal(row.querySelector('.rhs-note').textContent, 'Rock Band and My kit only need a drum stem');
+    assert.equal(row.querySelector('.rhs-note').textContent, 'Rock Band and Kit only need a drum stem');
     c = t.prefs().controllers[0];
     assert.equal(c.soundMode, 'kit');
     t.bs.dispose();
@@ -1869,4 +1872,64 @@ test('joinPad ignores a non-integer pad; leaving drops a pending join', async ()
     await flush();
     assert.equal(u.prefs().controllers.length, 0);
     u.bs.dispose();
+});
+
+// ---- Part sheet stream (B1): sound-mode labels and the pad volume ----
+
+const padDrums = (volume = 0.8) => {
+    const sets = [];
+    return { sets, api: {
+        getPadSound: () => ({ muted: false, volume }),
+        setPadSound: (o) => { sets.push(o); if (typeof o.volume === 'number') volume = o.volume; return { muted: false, volume }; },
+    } };
+};
+
+test("the real drummer's sound modes read Rock Band / Song + pads / Kit only, with the pad volume beside them", () => {
+    const pads = padDrums(0.7);
+    const { part, bs } = setup({ winExtra: { feedBackDrums: pads.api } });
+    const seg = part('drums').querySelector('.rhs-seg[data-field="soundMode"]');
+    assert.deepEqual(seg.querySelectorAll('button').map((b) => [b.getAttribute('data-value'), b.textContent]),
+        [['rockband', 'Rock Band'], ['song', 'Song + pads'], ['kit', 'Kit only']]);
+    const field = part('drums').querySelector('.rhs-padvol');
+    assert.ok(field, 'a pad volume field on the drums row');
+    assert.equal(field.parentNode, seg.parentNode.parentNode, 'beside the sound mode');
+    assert.equal(field.hidden, false);
+    const input = field.querySelector('.rhs-padvol-input');
+    assert.equal(input.value, '70');
+    input.value = '45';
+    input.fire('input');
+    assert.deepEqual(pads.sets, [{ volume: 0.45 }]);
+    bs.dispose();
+});
+
+test('without the pad sound API the pad volume hides', () => {
+    const { part, bs } = setup();
+    assert.equal(part('drums').querySelector('.rhs-padvol').hidden, true);
+    bs.dispose();
+});
+
+test('a drums controller row has the pad volume beside its sound mode; a 5-fret row has none', async () => {
+    const pads = padDrums(0.5);
+    const t = ctlSetup({
+        drums: true, pads: [gpad(0, 'Kit', 1, { kind: null, mapping: '', drumsKind: 'kit' })],
+        stored: ctlPrefs([{ key: 'Kit#1', playsAs: 'drums', part: 'drums' }]),
+        winExtra: { feedBackDrums: pads.api },
+    });
+    await flush();
+    onConfirm(t, drumSong);
+    const row = t.confirmRows()[0];
+    const field = row.querySelector('.rhs-padvol');
+    assert.ok(field);
+    assert.equal(field.hidden, false);
+    const input = field.querySelector('.rhs-padvol-input');
+    assert.equal(input.value, '50');
+    input.value = '90';
+    input.fire('input');
+    assert.deepEqual(pads.sets, [{ volume: 0.9 }]);
+    t.bs.dispose();
+    const ff = ctlSetup({ stored: ctlPrefs([{ key: 'Xbox#1', part: 'guitar' }]) });
+    await flush();
+    onConfirm(ff, ffSong);
+    assert.equal(ff.confirmRows()[0].querySelector('.rhs-padvol'), null);
+    ff.bs.dispose();
 });
