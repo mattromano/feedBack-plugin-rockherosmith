@@ -5,14 +5,17 @@
 // the earlier attributes back, and focus left inside it goes back where it was.
 // Nav links are taken over in the capture phase and handed to onNavigate; follow()
 // re-clicks one with the takeover bypassed so shell's own handler runs.
+// items: the stage menu's own entries (the Part sheet), buttons put at the top of the
+// sidebar while it is open; picking one closes the sidebar, then runs it.
 import { contains, restoreFocus } from './modal-open.js';
 
 const OPEN_CLASS = 'rhs-sidebar-open';
 const MODAL_ATTRS = [['role', 'dialog'], ['aria-modal', 'true']];
 
-// createSidebarOverlay({ doc, onNavigate })
+// createSidebarOverlay({ doc, onNavigate, items })
+//   items: [{ id, label, title?, visible?(): boolean, onSelect() }]
 //   -> { open(via), close(), toggle(via), isOpen(), follow(link), destroy() }
-export function createSidebarOverlay({ doc, onNavigate }) {
+export function createSidebarOverlay({ doc, onNavigate, items = [] }) {
     const sidebar = doc.getElementById('v3-sidebar');
     let open = false;
     let byEdge = false;
@@ -20,6 +23,34 @@ export function createSidebarOverlay({ doc, onNavigate }) {
     let destroyed = false;
     let saved = null;
     let prevFocus = null;
+    let shownItems = [];
+
+    function addItems() {
+        const list = (Array.isArray(items) ? items : []).filter((it) => {
+            if (!it || typeof it.onSelect !== 'function') return false;
+            try { return typeof it.visible !== 'function' || it.visible() === true; } catch (_) { return false; }
+        });
+        shownItems = list.map((it) => {
+            const b = doc.createElement('button');
+            b.type = 'button';
+            b.className = 'rhs-sidebar-item';
+            b.setAttribute('data-rhs-item', String(it.id || ''));
+            b.textContent = it.label || '';
+            if (it.title) b.setAttribute('title', it.title);
+            b.addEventListener('click', (e) => {
+                if (e && typeof e.preventDefault === 'function') e.preventDefault();
+                close();
+                try { it.onSelect(); } catch (err) { console.warn('[rockherosmith] menu item failed', err); }
+            });
+            return b;
+        });
+        for (let i = shownItems.length - 1; i >= 0; i--) sidebar.prepend(shownItems[i]);
+    }
+
+    function removeItems() {
+        for (const b of shownItems) b.remove();
+        shownItems = [];
+    }
 
     function onClick(e) {
         if (following) return;
@@ -61,6 +92,7 @@ export function createSidebarOverlay({ doc, onNavigate }) {
         if (!sidebar.getAttribute('aria-label')) sidebar.setAttribute('aria-label', 'Menu');
         doc.body.classList.add(OPEN_CLASS);
         setEdge(via === 'edge');
+        addItems();
         return true;
     }
 
@@ -76,6 +108,7 @@ export function createSidebarOverlay({ doc, onNavigate }) {
             else sidebar.setAttribute(k, v);
         }
         saved = null;
+        removeItems();
         doc.body.classList.remove(OPEN_CLASS);
         if (focusInside && !following) restoreFocus(doc, prevFocus);
         prevFocus = null;

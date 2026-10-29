@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
     loadPrefs, savePrefs, normalizePrefs, pushRecent, clampZoom,
     MIC_HIT_DB_MIN, MIC_HIT_DB_MAX, MIC_HIT_DB_STEP, MIC_HIT_DB_DEFAULT, clampMicHitDb,
-    migrateLegacyPrefs, LEGACY_KEY,
+    migrateLegacyPrefs, LEGACY_KEY, createPrefsCache,
 } from '../src/prefs.js';
 
 function stub(initial = {}) {
@@ -288,4 +288,64 @@ test('missSound: on by default, a saved false kept, garbage falls back to on', (
     assert.equal(loadPrefs(stub({})).missSound, true);
     assert.equal(loadPrefs(stub({ [KEY]: '{"missSound":false}' })).missSound, false);
     assert.equal(loadPrefs(stub({ [KEY]: '{"missSound":"no"}' })).missSound, true);
+});
+
+// Play layer contract §7: adopting plain plays, and the Solo screen's choices.
+const SOLO_DEFAULTS = {
+    instrument: 'kit', part: 'guitar', arrangement: 'Lead', difficulty: 'expert',
+    soundMode: 'rockband', crowd: true, failMode: 'nofail', autoNext: false,
+};
+
+test('adoptSolo: on by default, a saved false kept, garbage falls back to on', () => {
+    assert.equal(loadPrefs(stub({})).adoptSolo, true);
+    assert.equal(loadPrefs(stub({ [KEY]: '{"adoptSolo":false}' })).adoptSolo, false);
+    assert.equal(loadPrefs(stub({ [KEY]: '{"adoptSolo":1}' })).adoptSolo, true);
+});
+
+test('solo: defaults, and each bad field falls back alone', () => {
+    assert.deepEqual(loadPrefs(stub({})).solo, SOLO_DEFAULTS);
+    assert.deepEqual(normalizePrefs({ solo: 'x' }).solo, SOLO_DEFAULTS);
+    const kept = { instrument: 'five_fret', part: 'bass', arrangement: 'Rhythm', difficulty: 'hard',
+        soundMode: 'kit', crowd: false, failMode: 'fail', autoNext: true };
+    assert.deepEqual(normalizePrefs({ solo: kept }).solo, kept);
+    const bad = normalizePrefs({ solo: { instrument: 'keys', part: 'drums', arrangement: 'Combo', difficulty: 'expert_plus',
+        soundMode: 'loud', crowd: 'y', failMode: 'never', autoNext: 0, bogus: 1 } }).solo;
+    assert.deepEqual(bad, SOLO_DEFAULTS);
+    assert.equal(normalizePrefs({ solo: { instrument: 'guitar' } }).solo.instrument, 'guitar');
+    assert.equal(normalizePrefs({ solo: { instrument: 'drums' } }).solo.instrument, 'drums');
+});
+
+test('savePrefs merges solo shallowly', () => {
+    const s = stub({});
+    savePrefs({ solo: { instrument: 'five_fret', part: 'bass' } }, s);
+    const next = savePrefs({ solo: { difficulty: 'hard' } }, s);
+    assert.deepEqual([next.solo.instrument, next.solo.part, next.solo.difficulty], ['five_fret', 'bass', 'hard']);
+    assert.deepEqual(loadPrefs(s).solo, next.solo);
+    assert.equal(savePrefs({ adoptSolo: false }, s).adoptSolo, false);
+    assert.equal(loadPrefs(s).solo.part, 'bass');
+});
+
+test('createPrefsCache: loads once, again after a savePrefs or a storage event for the key', () => {
+    const s = stub({});
+    let loads = 0;
+    const win = new EventTarget();
+    const cache = createPrefsCache({ load: () => { loads++; return loadPrefs(s); }, win });
+    for (let i = 0; i < 100; i++) assert.equal(cache.get().adoptSolo, true);
+    assert.equal(loads, 1);
+    savePrefs({ adoptSolo: false }, s);
+    assert.equal(cache.get().adoptSolo, false);
+    assert.equal(loads, 2);
+    const ev = (key) => { const e = new Event('storage'); e.key = key; return e; };
+    win.dispatchEvent(ev('other.key'));
+    cache.get();
+    assert.equal(loads, 2, 'another key keeps the cache');
+    win.dispatchEvent(ev(KEY));
+    cache.get();
+    assert.equal(loads, 3);
+    cache.dispose();
+    win.dispatchEvent(ev(KEY));
+    cache.get();
+    assert.equal(loads, 4, 'disposed: loads again (nothing cached)');
+    cache.get();
+    assert.equal(loads, 4);
 });

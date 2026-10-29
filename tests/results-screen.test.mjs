@@ -241,3 +241,105 @@ test('the results hold the media keys while shown', () => {
     assert.equal(handlers.play, null);
     screen.hide();
 });
+
+// ── Stream B3: sections, practice and run history ───────────────────────
+
+const SECTIONS = [
+    { name: 'Intro 1', start: 0, end: 10, pct: 100, worst: false },
+    { name: 'Verse 1', start: 10, end: 20, pct: 60, worst: true },
+];
+const withSections = () => ({ ...MODEL, cards: MODEL.cards.map((c) => (c.part === 'drums' ? { ...c, sections: SECTIONS } : { ...c, sections: [] })) });
+
+function setupPractice(model = withSections(), onPractice) {
+    const doc = makeDoc();
+    const host = makeEl('div', doc);
+    doc.body.appendChild(host);
+    const win = { addEventListener() {}, removeEventListener() {} };
+    const screen = showResultsScreen({ doc, win, host, model, onAgain() {}, onNext() {}, onPractice });
+    return { doc, host, screen };
+}
+
+test('a card with sections lists them, the worst highlighted; none shows no list or practice bar', () => {
+    const { host } = setup();
+    assert.equal(host.querySelector('div.rhs-sections'), null);
+    assert.equal(host.querySelector('div.rhs-practice'), null);
+    const env = setupPractice(withSections(), () => {});
+    const drums = env.host.querySelector('div.rhs-card[data-part="drums"]');
+    const rows = drums.querySelectorAll('button.rhs-section');
+    assert.deepEqual(rows.map((b) => b.textContent), ['Intro 1100%', 'Verse 160%']);
+    assert.deepEqual(rows.map((b) => b.classList.contains('rhs-worst')), [false, true]);
+    assert.equal(rows[1].getAttribute('aria-label'), 'Practice Verse 1, 60%');
+    assert.equal(env.host.querySelector('div.rhs-card[data-part="guitar"]').querySelector('div.rhs-sections'), null);
+    assert.ok(env.host.querySelector('div.rhs-practice'));
+});
+
+test('a section click asks for practice with the chosen speed and drill', () => {
+    const doc = makeDoc();
+    const host = makeEl('div', doc);
+    doc.body.appendChild(host);
+    const win = { addEventListener() {}, removeEventListener() {} };
+    const asked = [];
+    showResultsScreen({ doc, win, host, model: withSections(), onAgain() {}, onNext() {}, onPractice: (p) => asked.push(p) });
+    const speeds = host.querySelectorAll('button.rhs-speed');
+    assert.deepEqual(speeds.map((b) => b.textContent), ['100%', '90%', '80%', '70%']);
+    assert.deepEqual(speeds.map((b) => b.getAttribute('aria-pressed')), ['true', 'false', 'false', 'false']);
+    const drill = host.querySelector('button.rhs-drill');
+    assert.equal(drill.textContent, 'Drill: 90% three times');
+    assert.equal(drill.getAttribute('aria-pressed'), 'false');
+    const verse = host.querySelectorAll('button.rhs-section')[1];
+    verse.click();
+    assert.deepEqual(asked, [{ part: 'drums', section: { name: 'Verse 1', start: 10, end: 20 }, speed: 1, drill: false }]);
+    speeds[2].click();
+    drill.click();
+    assert.deepEqual(speeds.map((b) => b.getAttribute('aria-pressed')), ['false', 'false', 'true', 'false']);
+    assert.equal(drill.getAttribute('aria-pressed'), 'true');
+    verse.click();
+    assert.deepEqual(asked[1], { part: 'drums', section: { name: 'Verse 1', start: 10, end: 20 }, speed: 0.8, drill: true });
+});
+
+test('without onPractice the sections show but are not buttons', () => {
+    const { host } = setupPractice();
+    assert.equal(host.querySelectorAll('button.rhs-section').length, 0);
+    assert.equal(host.querySelectorAll('span.rhs-section').length, 2);
+    assert.equal(host.querySelector('div.rhs-practice'), null);
+});
+
+test('Tab cycles through every button of the dialog', () => {
+    const doc = makeDoc();
+    const host = makeEl('div', doc);
+    doc.body.appendChild(host);
+    let onKey = null;
+    const win = { addEventListener: (t, f) => { if (t === 'keydown') onKey = f; }, removeEventListener() {} };
+    showResultsScreen({ doc, win, host, model: withSections(), onAgain() {}, onNext() {}, onPractice() {} });
+    const buttons = host.querySelectorAll('button');
+    assert.equal(buttons.length, 2 + 4 + 1 + 2);
+    const next = host.querySelector('button.rhs-next');
+    assert.equal(doc.activeElement, next);
+    const tab = (shiftKey = false) => onKey({ key: 'Tab', shiftKey, target: doc.activeElement, preventDefault() {}, stopPropagation() {} });
+    tab();
+    assert.equal(doc.activeElement, buttons[0], 'from the last button to the first');
+    tab(true);
+    assert.equal(doc.activeElement, next);
+});
+
+test('setHistory fills a card: best, New best, recent runs; unknown parts and hide are safe', () => {
+    const { host, screen } = setup();
+    const drums = host.querySelector('div.rhs-card[data-part="drums"]');
+    assert.equal(drums.querySelector('div.rhs-history'), null);
+    screen.setHistory('drums', { newBest: true, firstRun: false, best: { score: 6000, accuracyPct: 95 },
+        recent: [{ score: 5000, accuracyPct: 96, fullCombo: false }, { score: 4000, accuracyPct: null, fullCombo: true }] });
+    const hist = drums.querySelector('div.rhs-history');
+    assert.equal(hist.querySelector('.rhs-new-best').textContent, 'New best!');
+    assert.equal(hist.querySelector('.rhs-hist-best').textContent, 'Best6,000 · 95%');
+    assert.deepEqual(hist.querySelectorAll('span.rhs-hist-run').map((r) => r.textContent), ['5,000 · 96%', '4,000 · FC']);
+    // A second answer replaces the first.
+    screen.setHistory('drums', { newBest: false, firstRun: true, best: null, recent: [] });
+    assert.equal(drums.querySelectorAll('div.rhs-history').length, 1);
+    assert.equal(drums.querySelector('.rhs-new-best'), null);
+    assert.equal(drums.querySelector('.rhs-first-run').textContent, 'First run');
+    assert.equal(drums.querySelector('.rhs-hist-best'), null);
+    assert.doesNotThrow(() => screen.setHistory('ctl9', { newBest: true, best: null, recent: [] }));
+    assert.doesNotThrow(() => screen.setHistory('drums', null));
+    screen.hide();
+    assert.doesNotThrow(() => screen.setHistory('drums', { newBest: true, best: null, recent: [] }));
+});

@@ -22,6 +22,9 @@
 //     muffles the whole song for it instead of muting a stem.
 //   - My kit only has no stem on an unsplit song, so it plays as Song drums
 //     (as the band screen shows it): a kit member keeps the full mix playing.
+//   - The real drummer in Rock Band with no drum stem (play layer contract §6) is a
+//     `dropout` member: on the full mix it drops and restores like a Rock Band
+//     controller, but its fail never mutes the mix (its own fail claim rules).
 import { dropoutStep } from './drum-sound.js';
 
 // The pseudo stem id of the whole song's mix (never a stems id).
@@ -33,7 +36,7 @@ export function isUnsplit(stemIds) {
     return ids.every((id) => id.toLowerCase() === 'full');
 }
 
-// createStemSound({ members: [{ id, stemId, controller, mode: 'rockband'|'always'|'kit' }], fullMix })
+// createStemSound({ members: [{ id, stemId, controller, dropout?, mode: 'rockband'|'always'|'kit'|'song' }], fullMix })
 // Members with no stemId are ignored, or with fullMix put on FULL_MIX. judge,
 // setFailed and seek return the stem ids whose muted() changed.
 export function createStemSound({ members, fullMix = false } = {}) {
@@ -49,10 +52,12 @@ export function createStemSound({ members, fullMix = false } = {}) {
         const st = stems.get(stemId);
         st.players.push(m);
         const ctl = m.controller === true;
+        // A real drummer's Rock Band, on the full mix only (it owns a drum stem).
+        const drops = ctl || (m.dropout === true && stemId === FULL_MIX);
         const mode = stemId === FULL_MIX && m.mode === 'kit' ? 'always' : m.mode;
-        if (!(ctl && (mode === 'rockband' || mode === 'kit'))) st.rockband = false;
+        if (!(drops && (mode === 'rockband' || mode === 'kit'))) st.rockband = false;
         if (!(ctl && mode === 'kit')) st.kit = false;
-        if (ctl) stemOf.set(m.id, stemId);
+        if (drops) stemOf.set(m.id, stemId);
     }
     // The real drummer's stem is left alone (Ruling 9).
     for (const [stemId, st] of stems) {
@@ -70,6 +75,8 @@ export function createStemSound({ members, fullMix = false } = {}) {
     return {
         stems: () => [...stems.keys()],
         muted: (stemId) => { const st = stems.get(stemId); return !!st && isMuted(st); },
+        // Whether player `id`'s misses can drop its stem (or the full mix) out.
+        drops: (id) => { const st = stems.get(stemOf.get(id)); return !!st && st.rockband && !st.kit; },
         judge(id, kind) {
             const st = stems.get(stemOf.get(id));
             if (!st || failed.has(id) || !st.rockband || st.kit) return [];

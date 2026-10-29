@@ -6,6 +6,7 @@ Play a song as a band from Home or the Song Library: Setup, Confirm, then the li
 ## Ways in
 
 - **Play RockHeroSmith** on Home opens band Setup.
+- **Play solo** on Home (and on Band setup) opens the Solo screen.
 - **Start** on any free controller from Home, the Song Library or Settings opens Setup with
   that controller joined.
 - The **RockHeroSmith** button on band-ready Song Library cards (a real guitar part plus a
@@ -19,6 +20,30 @@ None of these does anything while a band song is playing.
 - **Picking a song.** Band setup → **Choose a song** opens the Song Library in pick mode
   (band chips, click to select, **Use this song**) → Confirm (parts, difficulty, devices,
   drum sound) → GO. Next song goes back to the library.
+
+## Solo
+
+The Solo screen is for playing alone: a band of one on the RockHeroSmith stage.
+
+- **Instrument:** Drums (kit) on the Drums plugin's MIDI input, a drum controller, a 5-fret
+  controller (Lead / Rhythm / Bass), or real guitar (Lead / Rhythm / Bass arrangement). Pick a
+  difficulty, and for drums the drum sound.
+- **Songs:** the library, filtered to songs with that part (a drum chart, the 5-fret part, or the
+  arrangement), with a search box. **Browse library** opens the Song Library in pick mode with
+  the same filter.
+- **Click a song, or Enter / A:** it plays straight away on that chart. Drums and controllers
+  play on the RockHeroSmith stage (`playSolo`); real guitar plays as a normal song on that
+  arrangement.
+- If the instrument isn't there (no MIDI kit, no controller), the screen says so and offers
+  the Drums or 5-Fret controls.
+- **Options:** the crowd meter on or off, failing, and **Next song** (back to the list, or play
+  the next song in it).
+- Every choice is remembered (`prefs.solo`). Leaving a solo song mid-song (Esc, End song,
+  holding Back) and Results' **Next song** come back here. So does a drums Play as.
+- **Plain drums and 5-Fret plays.** A song played the normal way on the drum view or the
+  5-Fret view is scored by RockHeroSmith as a band of one (HUD, results, drop-outs). It
+  still leaves like any song: Esc, End song and Results' **Next song** go back to where you
+  started it.
 
 ## Playing on a controller
 
@@ -44,9 +69,10 @@ None of these does anything while a band song is playing.
   muffles the whole song instead. Part audio is greyed when a split song has no stem for
   the part.
 - **On Confirm, Drums:** the part is Drums ("also:" names the other drummers), then the
-  difficulty and the Sound: **Song drums**, **Rock Band** or **My kit only**, as for the
-  real drummer. Rock Band and My kit only are greyed when a split song has no drum stem
-  (on an unsplit song only My kit only is). With
+  difficulty, the Sound: **Rock Band**, **Song + pads** or **Kit only**, as for the real
+  drummer, and the drums plugin's **Pad volume** (one setting for every kit). Rock Band
+  and Kit only are greyed when a split song has no drum stem (on an unsplit song only
+  Kit only is, for the real drummer too: Rock Band muffles the whole song). With
   the real drummer on, the drummer's own sound mode sets the drum stem and the controller's
   Sound doesn't apply (the row says so). A song with no drum chart says "No drum chart for
   this song" and the controller sits out.
@@ -83,12 +109,34 @@ None of these does anything while a band song is playing.
 - **`M` and the sidebar.** `M`, the Menu button or (in full mode) the left edge open the app
   sidebar over the song, which keeps playing. Esc, a click outside it or leaving it (when
   the edge opened it) closes it. With the sidebar shut, Esc leaves the song as usual.
+- **Part settings mid-song.** **P**, or **Part** at the top of the sidebar, opens the Part
+  sheet over the song, which keeps playing: for each drummer (the real kit and drums
+  controllers) and each 5-Fret controller, that plugin's quick settings for its lane
+  (difficulty, auto kick and cymbals, pro cymbals, timing, input offset, pad volume; for
+  5-Fret part, lefty and offset). A drummer's **Sound** (Rock Band, Song + pads, Kit only)
+  switches at once and is saved for that player. While a section practice loop runs it
+  also has **Stop practice** (clears the loop, speed back to full). Esc, P or Back to the
+  song closes it; with a pad, its arrows move through it and B closes it.
 - **Settings mid-song.** The sidebar's Settings pauses the song and shows Settings over it.
   Esc or "Back to the song" closes it, puts the band guitar difficulty back and resumes only
   what was playing. Any other sidebar item pauses and asks "Leave the song?": Stay resumes,
   Leave goes there.
 - **Guitar input errors.** In a band song note_detect doesn't block with an alert. The band
   shows "Guitar input couldn't start" instead.
+
+## Results: sections, practice and your bests
+
+- **Sections.** Each card lists the song's sections with that player's accuracy in them; the
+  two worst (below 100%, at least 4 notes) are marked in red.
+- **Practice a section.** Click a section to play the song again looping it with core's A-B
+  loop. The practice bar sets the speed (100/90/80/70%) and the drill: loop until 90% three
+  times in a row, speeding up a step after each clear below full speed. Every loop pass starts
+  from the score at the loop start, and a practice song never ends in Band failed.
+- **Practice isn't scored.** A song that looped or was slowed down is sent as practice, so
+  feedBack keeps no stats, XP or bests for it.
+- **Bests.** With a feedBack that has run history, each drums, 5-fret and vocals card shows
+  your best for the song, part and difficulty, your last runs, and "New best!" when this run
+  beats it.
 
 ## Development
 

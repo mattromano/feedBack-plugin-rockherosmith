@@ -5,6 +5,8 @@ import { CONTROLLER_KINDS, PART_AUDIO_MODES, isControllerId } from './controller
 import { DRUM_SOUND_MODES } from './drum-sound.js';
 
 const KEY = 'rockherosmith.prefs.v1';
+// Bumped by every savePrefs, so a prefs cache knows to load again.
+let saveVersion = 0;
 // Pre-rename key (the old Build-a-Band key): copied to KEY on first load, never removed.
 export const LEGACY_KEY = 'build_a_band.prefs.v1';
 
@@ -24,6 +26,13 @@ const ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass'];
 const SOUND_MODES = ['song', 'rockband', 'kit'];
 const FAIL_MODES = ['nofail', 'fail'];
 const MAX_RECENT = 10;
+// The Solo screen's choices (play layer contract §7): the instrument, the 5-fret part,
+// the real guitar's arrangement, and how a solo session plays.
+export const SOLO_INSTRUMENTS = Object.freeze(['kit', 'drums', 'five_fret', 'guitar']);
+export const SOLO_DEFAULTS = Object.freeze({
+    instrument: 'kit', part: 'guitar', arrangement: 'Lead', difficulty: 'expert',
+    soundMode: 'rockband', crowd: true, failMode: 'nofail', autoNext: false,
+});
 export const LABEL_SCALE_MIN = 0.75;
 export const LABEL_SCALE_MAX = 2.5;
 // Per-lane zoom (guitar and drum lanes; the vocal strip has none).
@@ -149,6 +158,21 @@ function normalizeZoom(v) {
     return { guitar: clampZoom(z.guitar), drums: clampZoom(z.drums) };
 }
 
+function normalizeSolo(v) {
+    const r = isObj(v) ? v : {};
+    const d = SOLO_DEFAULTS;
+    return {
+        instrument: oneOf(r.instrument, SOLO_INSTRUMENTS, d.instrument),
+        part: oneOf(r.part, CONTROLLER_KINDS.five_fret.parts, d.part),
+        arrangement: oneOf(r.arrangement, ARRANGEMENTS, d.arrangement),
+        difficulty: oneOf(r.difficulty, DIFFICULTIES, d.difficulty),
+        soundMode: oneOf(r.soundMode, DRUM_SOUND_MODES, d.soundMode),
+        crowd: bool(r.crowd, d.crowd),
+        failMode: oneOf(r.failMode, FAIL_MODES, d.failMode),
+        autoNext: bool(r.autoNext, d.autoNext),
+    };
+}
+
 function normalizePickFilters(v) {
     const r = isObj(v) ? v : {};
     const out = {};
@@ -178,6 +202,9 @@ export function normalizePrefs(raw) {
         pickFilters: normalizePickFilters(r.pickFilters),
         controllers: normalizeControllers(r.controllers),
         controllerKinds: normalizeControllerKinds(r.controllerKinds),
+        // A plain drums / 5-fret play becomes a one-player session (contract §2).
+        adoptSolo: bool(r.adoptSolo, true),
+        solo: normalizeSolo(r.solo),
     };
 }
 
@@ -216,6 +243,7 @@ export function savePrefs(patch, storage = defaultStorage()) {
         ...cur, ...p, parts: { ...cur.parts },
         zoom: { ...cur.zoom, ...(isObj(p.zoom) ? p.zoom : {}) },
         pickFilters: { ...cur.pickFilters, ...(isObj(p.pickFilters) ? p.pickFilters : {}) },
+        solo: { ...cur.solo, ...(isObj(p.solo) ? p.solo : {}) },
     };
     if (isObj(p.parts)) {
         for (const id of Object.keys(p.parts)) {
@@ -226,5 +254,27 @@ export function savePrefs(patch, storage = defaultStorage()) {
     try {
         if (storage) storage.setItem(KEY, JSON.stringify(next));
     } catch (_) { /* quota / denied: keep in-memory result */ }
+    saveVersion++;
     return next;
+}
+
+// The prefs kept in memory, for readers on a hot path (rockHeroSmith.adoptsSolo is
+// asked every frame): loaded once, and again after any savePrefs or a `storage` event
+// for the prefs key (another window). -> { get(), dispose() }
+export function createPrefsCache({ load = () => loadPrefs(), win } = {}) {
+    let cur = null;
+    let ver = -1;
+    const onStorage = (e) => { if (!e || e.key === null || e.key === undefined || e.key === KEY) cur = null; };
+    const listens = !!win && typeof win.addEventListener === 'function';
+    if (listens) win.addEventListener('storage', onStorage);
+    return {
+        get() {
+            if (!cur || ver !== saveVersion) { cur = load(); ver = saveVersion; }
+            return cur;
+        },
+        dispose() {
+            if (listens && typeof win.removeEventListener === 'function') win.removeEventListener('storage', onStorage);
+            cur = null;
+        },
+    };
 }

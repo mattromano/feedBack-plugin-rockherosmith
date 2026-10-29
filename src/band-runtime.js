@@ -6,18 +6,21 @@
 // Everything is injected, so this is testable under node; screen.js passes
 // the real window/document. Nothing here plays sound.
 import { initialSession, reduceSession } from './session.js';
-import { drumsDifficultyId, masteryFor, masteryFromPct } from './mappings.js';
+import { drumsDifficultyId, masteryFor, masteryFromPct, DIFFICULTIES } from './mappings.js';
 import { drumArrIndex } from './arrangements.js';
 import { applyDevices } from './devices.js';
 import { planStage } from './stage.js';
 import { PART_TYPES, getPart, hasChart, songFacts } from './parts.js';
 import { karaokeApi, armVocals, startVocals, stopVocals, showKaraokeHud } from './vocals.js';
 import { createBandScore } from './band-score.js';
-import { guitarEntry, drumsEntry, vocalsEntry, vocalsTotals, onsetTime } from './part-events.js';
+import { guitarEntry, drumsEntry, drumsBonusEntry, vocalsEntry, vocalsTotals, onsetTime } from './part-events.js';
+import { playerInfo, judgmentEvent, resultEvent, sessionIdFor } from './play-events.js';
 import { chartPhrases } from './guitar-od.js';
 import { createOverdriveSession } from './overdrive-session.js';
+import { quickSettingPatch, soloShowsCrowd } from './solo.js';
+import { SOLO_SCREEN_ID } from './solo-screen-model.js';
 import { stemIdFor, muteStem, restoreStem, SOUND_CLAIM_ID, STEM_SOUND_CLAIM_PREFIX } from './stem-claims.js';
-import { createDrumSound } from './drum-sound.js';
+import { createDrumSound, padsMuted, DRUM_SOUND_MODES } from './drum-sound.js';
 import { createStemSound, FULL_MIX, isUnsplit } from './stem-sound.js';
 import { createMissSound } from './miss-sound.js';
 import { createMixMuffle } from './mix-muffle.js';
@@ -26,12 +29,16 @@ import { guitarStarThresholds, fullChartThresholds } from './stars.js';
 import { createBandHud } from './hud.js';
 import { createToastStack } from './toasts.js';
 import { createCountInOverlay } from './count-in-overlay.js';
-import { resultsModel } from './results.js';
+import { resultsModel, createHistoryLoader } from './results.js';
 import { showResultsScreen, isTyping } from './results-screen.js';
+import { sectionRanges, playerSections, rangeTally, entryTime } from './sections.js';
+import { initialPractice, reducePractice, isPractice } from './practice.js';
 import { createFullScreen } from './full-screen.js';
 import { createStageChrome } from './stage-chrome.js';
 import { createSidebarOverlay } from './sidebar-overlay.js';
 import { openSettingsOverlay } from './settings-overlay.js';
+import { openPartSheet, partSheetPlayers, withSoundMode, soundModePatch, isPartSheetKey } from './part-sheet.js';
+import { loadPrefs as readSavedPrefs, savePrefs } from './prefs.js';
 import { otherModalOpen } from './modal-open.js';
 import { CONTROLLER_KINDS, kindFor, isControllerId } from './controller-model.js';
 import { createControllerLanes, kindOf } from './controller-lanes.js';
@@ -67,12 +74,16 @@ function safe(fn) {
     try { return fn(); } catch (e) { console.warn('[rockherosmith]', e); return undefined; }
 }
 
-// The prefs a session runs with: Rock Band / My kit need a drum stem, so a
-// song without one plays with the song's own drums.
-function sessionPrefs(prefs, item) {
+// The prefs a session runs with: Rock Band / Kit only need a drum stem, so a
+// song without one plays with the song's own drums; except Rock Band on an
+// unsplit song, which muffles the full mix as controllers do (contract §6).
+// stemIds: the song's stems (the library item's, or stems' own list).
+function sessionPrefs(prefs, item, stemIds) {
     const drums = prefs && prefs.parts && prefs.parts.drums;
     if (!drums || !STEM_SOUND_MODES.includes(drums.soundMode)) return prefs;
-    if (songFacts(item).stemIds.includes('drums')) return prefs;
+    const ids = Array.isArray(stemIds) && stemIds.length ? stemIds : songFacts(item).stemIds;
+    if (ids.includes('drums')) return prefs;
+    if (drums.soundMode === 'rockband' && isUnsplit(ids)) return prefs;
     return { ...prefs, parts: { ...prefs.parts, drums: { ...drums, soundMode: 'song' } } };
 }
 
@@ -128,18 +139,27 @@ function withoutVocals(prefs) {
 //   (never for Play again or leaving), so the band screen can open its song pick.
 //   deviceMemo: the inputs last handed to note_detect / drums (devices.js),
 //   shared with the band screen so a Go doesn't re-apply a device just picked.
+//   adopt: optional (play layer contract §2); adopt(song) -> prefs | null | Promise of
+//   either: the one-player prefs a plain play (song:ready outside a session) becomes.
+//   onShowSoloScreen({ next }): optional; Next song after a playSolo session, or leaving one
+//   mid-song (else the band screen). Adopted plain plays use core's exit instead.
+//   onQuickSetting(detail, { solo }): optional; a 5-fret lane's quick settings change
+//   (five_fret:quick-setting) on this session's lane, for the caller to save.
+//   now: the clock for session ids (default Date.now).
 //   -> { dispose(), isMounted(), startSession({ song, prefs }): false | Promise<true>, phase(),
 //        snapshot(): the current session's band score snapshot, or null,
 //        overdrive(): its overdrive meters (overdrive-session snapshot), or null,
 //        again(), next(): Play again / Next song while the results show,
-//        stageUi(): { full, fullScreen, sidebar, overlay } for the current session, or null }
+//        stageUi(): { full, fullScreen, sidebar, overlay, partSheet } for the current session, or null,
+//        openPartSheet(): the Part sheet over the playing song (true when it shows),
+//        setSoundMode(playerId, mode): a drummer's sound mode, live and saved (true when applied) }
 // startSession returns false when it refuses (a session is running, no song);
 // otherwise a promise of core's playSong that rejects, after the session went
 // back to idle, when playSong throws or rejects.
 export function createBandRuntime({
     win, doc, mountStage, loadPrefs, storage = win.localStorage, fetchJson,
     setTimer = win.setTimeout, clearTimer = win.clearTimeout, deviceMemo = {}, onShowBandScreen,
-    kinds = CONTROLLER_KINDS, audioFactory,
+    kinds = CONTROLLER_KINDS, audioFactory, adopt, onShowSoloScreen, onQuickSetting, now = Date.now,
 }) {
     const fb = win.feedBack;
     const getJson = fetchJson || ((url) => win.fetch(url).then((r) => r.json()));
@@ -148,6 +168,15 @@ export function createBandRuntime({
     void loadPrefs;
 
     let state = initialSession();
+    // Session ids (play:* events) and the adopt in flight: a song change, a stop or
+    // a started session drops a pending adopt (its generation moves on).
+    let sessionCount = 0;
+    let adoptGen = 0;
+    // The screen a solo session was left to mid-song: the Solo screen opens once it shows.
+    let soloReturn = null;
+    // The screen core's player was last opened from (screen:changing to 'player'),
+    // where an adopted plain play returns on a Play again.
+    let playerFrom = null;
     // Per-session runtime data the pure reducer does not hold.
     let session = null;
     let stage = null;
@@ -181,7 +210,7 @@ export function createBandRuntime({
         return slider ? masteryFromPct(parseFloat(slider.value)) : null;
     }
 
-    function newSession(item, prefs, goPrefs) {
+    function newSession(item, prefs, goPrefs, { solo = false, adopted = false } = {}) {
         const guitarOn = isOn(prefs, 'guitar');
         const drumsOnly = !guitarOn && isOn(prefs, 'drums');
         const drumIndex = drumsOnly ? drumArrIndex(item.arrangements, { hasDrumTab: songFacts(item).hasDrumTab }) : -1;
@@ -189,6 +218,19 @@ export function createBandRuntime({
             item, prefs,
             // The prefs Go was given (Play again replays with them).
             goPrefs,
+            // Play layer (contract §2, §3): the play:* session id, a one-player
+            // session (playSolo or adopted), a plain play adopted (its song was
+            // already loading), the arrangement the song loaded on (read at mount),
+            // whether play:result went out, and whether the band muted the pads.
+            sessionId: sessionIdFor(now(), ++sessionCount),
+            solo: solo || adopted,
+            adopted,
+            loadedArrangement: null,
+            // Pro cymbals per drums player as its judgments last reported them
+            // (detail.proDrums), for play:result when the engine state has none.
+            proDrumsSeen: new Map(),
+            resultSent: false,
+            padsMuted: false,
             // The guitar part's arrangement, with the Lead fallback.
             guitarIndex: guitarOn ? getPart('guitar').chartFrom(item, prefs.parts.guitar) : undefined,
             drumsOnly,
@@ -283,8 +325,13 @@ export function createBandRuntime({
             chrome: null,
             sidebar: null,
             overlay: null,
+            // The Part sheet (part-sheet.js) over the playing song, or null.
+            partSheet: null,
             pauseToken: null,
             ndQuiet: null,
+            // How a leave was asked for: 'solo' (held Back, to the Solo screen) or
+            // 'nav' (a sidebar link), so the screen change isn't redirected again.
+            leaveTarget: null,
         };
     }
 
@@ -342,7 +389,7 @@ export function createBandRuntime({
         },
         onBackHold: (s) => {
             if (s.overlay && typeof s.overlay.answer === 'function') { s.overlay.answer(true); return; }
-            confirmLeave(s, () => { if (typeof win.showScreen === 'function') safe(() => win.showScreen(BAND_SCREEN)); });
+            confirmLeave(s, () => leaveSong(s));
         },
         // An overhit while paused is a stray pad tap on a pinned drum lane (R10).
         onJudgment: (s, id, type) => {
@@ -419,6 +466,8 @@ export function createBandRuntime({
             doc, player, stage, parts: s.scoreParts, prefs: s.prefs,
             song: { title: cur.title || s.item.title, artist: cur.artist || s.item.artist },
             oneLevel: !(s.readyDetail && s.readyDetail.hasPhraseData),
+            // Solo screen's crowd meter switch (B2, plan phase 8).
+            crowd: soloShowsCrowd(s.prefs, s.solo),
         })) || null;
         if (s.hud) safe(() => s.hud.update(s.score.snapshot()));
         // A remount keeps the dropped-out lanes grey.
@@ -485,12 +534,10 @@ export function createBandRuntime({
     // The drums plugin is loaded (its API or its renderer is there).
     const drumsPluginLoaded = () => !!win.feedBackDrums || typeof win.feedBackViz_drums === 'function';
 
-    // Drums' star power phrases for the results, from the band's drum canvas.
-    function drumsStarPower(s) {
-        const api = win.feedBackDrums;
-        const canvas = bandDrumCanvas(s);
-        if (!canvas || !api || typeof api.getInstanceState !== 'function') return null;
-        const sp = safe(() => { const st = api.getInstanceState(canvas); return st && st.starPower; });
+    // Drums' star power phrases for the results, from the drum engine's state
+    // (drumsState, read once for the results).
+    function drumsStarPower(st) {
+        const sp = st && st.starPower;
         if (!sp || !Number.isFinite(sp.phrasesHit) || !Number.isFinite(sp.phrasesTotal)) return null;
         return { phrasesHit: sp.phrasesHit, phrasesTotal: sp.phrasesTotal };
     }
@@ -533,8 +580,202 @@ export function createBandRuntime({
     function record(s, entry) {
         if (!entry) return;
         s.score.record(entry);
+        emitJudgment(s, entry);
         refreshHud(s, false);
         syncFailures(s);
+    }
+
+    // play:judgment (contract §3) for every entry the ledger took (a part still in
+    // the band); a listener that throws never breaks scoring.
+    function emitJudgment(s, entry) {
+        if (typeof fb.emit !== 'function' || !s.scoreParts.includes(entry.part)) return;
+        const part = s.score.snapshot().parts[entry.part];
+        const detail = judgmentEvent({
+            filename: s.item.filename, sessionId: s.sessionId, entry,
+            info: playerInfo(entry.part, s.prefs), totals: part,
+        });
+        safe(() => fb.emit('play:judgment', detail));
+    }
+
+    // play:result (contract §3), once per session, when the results open.
+    // drumsSt: the real drummer's engine state, already read for the results.
+    // Returns the detail it sent (null when it sent none), for the run history.
+    function emitResult(s, drumsSt) {
+        if (s.resultSent || typeof fb.emit !== 'function') return null;
+        s.resultSent = true;
+        const arrangements = {};
+        for (const id of s.scoreParts) {
+            if (id === 'vocals') continue;
+            if (id === 'guitar' && Number.isInteger(s.guitarIndex)) arrangements[id] = s.guitarIndex;
+            else if (Number.isInteger(s.loadedArrangement)) arrangements[id] = s.loadedArrangement;
+        }
+        // Pro cymbals per drums player, from its engine state (drums getInstanceState
+        // reports proDrums; a drums plugin that doesn't counts as not pro).
+        const proDrums = {};
+        for (const id of s.scoreParts) {
+            const st = id === 'drums' ? drumsSt
+                : (isControllerId(id) ? safe(() => lanes.laneState(s, id)) : null);
+            const pro = st && typeof st.proDrums === 'boolean' ? st.proDrums : s.proDrumsSeen.get(id);
+            if (pro === true) proDrums[id] = true;
+        }
+        // The drums plugin's difficulty at song end (getDifficulty), Expert+ as Expert.
+        const difficulties = {};
+        const api = win.feedBackDrums;
+        if (api && typeof api.getDifficulty === 'function') {
+            for (const id of s.scoreParts) {
+                const c = isControllerId(id) ? s.prefs.controllers.find((x) => x.id === id) : null;
+                const canvas = id === 'drums' ? bandDrumCanvas(s)
+                    : (c && c.playsAs === 'drums' && stage && typeof stage.getLaneCanvas === 'function' ? safe(() => stage.getLaneCanvas(id)) : null);
+                if (!canvas) continue;
+                const raw = safe(() => api.getDifficulty(canvas));
+                const diff = raw === 'expert_plus' ? 'expert' : raw;
+                if (DIFFICULTIES.includes(diff)) difficulties[id] = diff;
+            }
+        }
+        const detail = resultEvent({
+            filename: s.item.filename, sessionId: s.sessionId,
+            snapshot: s.score ? s.score.snapshot() : null, prefs: s.prefs, arrangements, proDrums, difficulties,
+            practice: isPractice(s.practice), sections: sessionSections(s), durationSec: displayTime(s),
+        });
+        safe(() => fb.emit('play:result', detail));
+        return detail;
+    }
+
+    // ── Stream B3: per-section accuracy, practice and run history ──────────
+    // Each player's sections (sections.js) from the ledger and the song's
+    // markers, read once when the results open (the song is still loaded).
+    function sessionSections(s) {
+        if (s.sections) return s.sections;
+        const hw = win.highway;
+        const raw = hw && typeof hw.getSections === 'function' ? safe(() => hw.getSections()) : null;
+        const audio = doc.getElementById('audio');
+        const entries = s.score && typeof s.score.entries === 'function' ? s.score.entries() : [];
+        // No duration known (the desktop engine's): the last section runs past the last judgment.
+        let dur = fb.currentSong && Number.isFinite(fb.currentSong.duration) ? fb.currentSong.duration
+            : (audio ? Number(audio.duration) : NaN);
+        if (!Number.isFinite(dur)) dur = Math.max(0, ...entries.map(entryTime).filter(Number.isFinite)) + 1;
+        s.sections = playerSections(entries, sectionRanges(raw, dur), s.scoreParts) || {};
+        return s.sections;
+    }
+
+    // The song's playback rate now (core's speed slider), or NaN.
+    function playbackRate() {
+        if (win._juceMode) return Number(win.jucePlayer && win.jucePlayer._speed);
+        const audio = doc.getElementById('audio');
+        return audio ? Number(audio.playbackRate) : NaN;
+    }
+
+    // practice.js's effects through core: the A-B loop (window.feedBack.setLoop /
+    // clearLoop), the speed (window.setSpeed) and the toast stack.
+    function practiceDispatch(s, action) {
+        const { state: next, effects } = reducePractice(s.practice || initialPractice(), action);
+        s.practice = next;
+        const syncLoop = () => { if (s.chrome) { const c = s.chrome; const st = loopState(); safe(() => c.setLoop(st)); } };
+        for (const e of effects) {
+            if (e.type === 'setLoop') {
+                if (typeof fb.setLoop !== 'function') { showToast(s, 'Looping a section needs a newer feedBack'); continue; }
+                Promise.resolve().then(() => fb.setLoop(e.start, e.end, { reason: 'rockherosmith-practice' }))
+                    .then(syncLoop, (err) => console.warn('[rockherosmith] practice loop failed', err));
+            } else if (e.type === 'clearLoop') {
+                if (typeof fb.clearLoop === 'function') safe(() => fb.clearLoop({ reason: 'rockherosmith-practice' }));
+                else if (typeof win.clearLoop === 'function') safe(() => win.clearLoop());
+                syncLoop();
+            } else if (e.type === 'setSpeed') {
+                if (typeof win.setSpeed === 'function') safe(() => win.setSpeed(e.rate));
+            } else if (e.type === 'toast') {
+                showToast(s, e.text);
+            }
+        }
+    }
+
+    // A loop pass ended (core's loop-wrap seek back to A): it was practice, the
+    // drill scores the pass, then the ledger rewinds to A like a backward seek,
+    // so every pass starts from the same score, crowd and drop-outs (a loop never
+    // piles up into a failure).
+    function practiceWrap(s, d) {
+        const loop = typeof fb.getLoop === 'function' ? safe(() => fb.getLoop()) : null;
+        const end = loop && Number.isFinite(loop.loopB) ? loop.loopB : d.from;
+        practiceDispatch(s, { type: 'wrap' });
+        practiceDispatch(s, { type: 'rate', rate: playbackRate() });
+        const pass = rangeTally(s.score.entries(), d.to, end + 0.001, s.scoreParts);
+        practiceDispatch(s, { type: 'pass', accuracy: pass.accuracy });
+        s.score.rewindTo(d.to);
+        s.lastT = d.to;
+        if (s.vocalsReset !== undefined) s.score.syncTotals('vocals', s.vocalsReset);
+        refreshHud(s, true);
+        syncFailures(s, { silent: true });
+    }
+
+    // Results "Practice this section": Play again, then loop it once the replay plays.
+    function practiceFromResults(plan) {
+        dispatch({ type: 'again' });
+        const next = session;
+        if (!next) return;
+        next.practicePlan = plan;
+        Promise.resolve(next.played).then(() => applyPracticePlan(next), () => {});
+    }
+
+    // Starts a pending practice when the session plays (after core's song load,
+    // which clears the loop and resets the speed). Runs once.
+    function applyPracticePlan(s) {
+        if (!s || !s.practicePlan || session !== s || state.phase !== 'playing') return;
+        const plan = s.practicePlan;
+        s.practicePlan = null;
+        practiceDispatch(s, { type: 'start', section: plan.section, speed: plan.speed, drill: plan.drill });
+    }
+
+    // The drums players' sound modes (the real drummer, drums controllers), with Rock
+    // Band counted as Song + pads unless its drop-out applies: a drum stem the mode
+    // mutes, or a stem / the full mix the player drops. A split song with no drum stem,
+    // or stems that haven't listed theirs yet, plays the pads.
+    function drumModes(s) {
+        const modes = [];
+        const drops = (id) => !!(s.stemSound && s.stemSound.drops(id));
+        if (s.scoreParts.includes('drums')) {
+            const mode = s.prefs.parts.drums.soundMode;
+            const applies = !!stemIdFor('drums', s.prefs.parts.drums, songStemIds()) || drops('drums');
+            modes.push(mode === 'rockband' && !applies ? 'song' : mode);
+        }
+        for (const id of s.scoreParts) {
+            const c = isControllerId(id) ? s.prefs.controllers.find((x) => x.id === id) : null;
+            if (c && c.playsAs === 'drums') modes.push(c.soundMode === 'rockband' && !drops(id) ? 'song' : c.soundMode);
+        }
+        return modes;
+    }
+
+    // Rock Band plays without pad sounds (contract §6): the drums plugin's pads are
+    // muted while every drums player is in Rock Band, and unmuted at teardown.
+    // setPadSound is feature-detected; an older drums plugin has window.__drumsMutePads.
+    function setPads(muted) {
+        const api = win.feedBackDrums;
+        if (api && typeof api.setPadSound === 'function') { safe(() => api.setPadSound({ muted })); return true; }
+        if (!api) return false;
+        win.__drumsMutePads = muted;
+        return true;
+    }
+
+    // Whether the pads are muted already (by the player or calibration): left as they are.
+    function padsAlreadyMuted() {
+        const api = win.feedBackDrums;
+        if (api && typeof api.getPadSound === 'function') {
+            const cur = safe(() => api.getPadSound());
+            return !!(cur && cur.muted === true);
+        }
+        if (api && typeof api.setPadSound === 'function') return false;
+        return win.__drumsMutePads === true;
+    }
+
+    // Idempotent; runs again when stems list theirs (a drop-out may apply now).
+    // Only a mute this session made is undone (releasePadSound).
+    function startPadSound(s) {
+        if (s.padsMuted || !s.score || !padsMuted(drumModes(s)) || padsAlreadyMuted()) return;
+        s.padsMuted = setPads(true);
+    }
+
+    function releasePadSound(s) {
+        if (!s.padsMuted) return;
+        s.padsMuted = false;
+        setPads(false);
     }
 
     // The stem ids of the song playing (stems' own list).
@@ -624,7 +865,14 @@ export function createBandRuntime({
         if (s.stemSound || !s.score) return;
         const ids = songStemIds();
         const members = s.scoreParts.map((id) => {
-            if (!isControllerId(id)) return { id, stemId: stemIdFor(id, s.prefs.parts[id], ids), controller: false };
+            if (!isControllerId(id)) {
+                const stemId = stemIdFor(id, s.prefs.parts[id], ids);
+                // The real drummer in Rock Band with no drum stem shares the full mix's drop-outs.
+                if (id === 'drums' && !stemId && s.prefs.parts.drums.soundMode === 'rockband') {
+                    return { id, stemId, controller: false, dropout: true, mode: 'rockband' };
+                }
+                return { id, stemId, controller: false };
+            }
             const c = s.prefs.controllers.find((x) => x.id === id);
             if (!c) return null;
             return { id, stemId: stemIdFor(kindFor(s.prefs, c.key), c, ids), controller: true, mode: controllerStemMode(s, id) };
@@ -697,7 +945,8 @@ export function createBandRuntime({
             }
         }
         if (s.stemSound) syncStemSound(s, s.stemSound.setFailed([...s.failed]));
-        if (snap.bandFailed && !s.bandFailed && session === s && state.phase === 'playing') {
+        // Practice never fails the song: the next loop pass rewinds the drop-outs.
+        if (snap.bandFailed && !s.bandFailed && session === s && state.phase === 'playing' && !isPractice(s.practice)) {
             s.bandFailed = true;
             dispatch({ type: 'failed' });
         }
@@ -809,6 +1058,7 @@ export function createBandRuntime({
                 startOverdrive(s);
                 startDrumSound(s);
                 startStemSound(s);
+                startPadSound(s);
                 // Splitscreen was still up at song:ready, so vocals had no
                 // strip slot then: start them now the stage is up.
                 if (s.vocals && !s.vocalsStarted && !s.vocalsFailed) EFFECTS.startVocals(s);
@@ -882,6 +1132,8 @@ export function createBandRuntime({
         const api = win.feedBackDrums;
         if (!api || !s.drumCanvas) return;
         if (typeof api.setInputTarget === 'function') safe(() => api.setInputTarget(s.drumCanvas));
+        // An adopted kit keeps the difficulty the player picked in the drums plugin.
+        if (s.adopted) return;
         if (typeof api.setDifficulty === 'function') safe(() => api.setDifficulty(drumsDifficultyId(s.prefs.parts.drums.difficulty), s.drumCanvas));
     }
 
@@ -915,7 +1167,15 @@ export function createBandRuntime({
         })) || null;
         if (s.chrome) { const c = s.chrome; const st = loopState(); safe(() => c.setLoop(st)); }
         if (!s.sidebar) {
-            s.sidebar = safe(() => createSidebarOverlay({ doc, onNavigate: (link, key) => onSidebarNav(s, link, key) })) || null;
+            s.sidebar = safe(() => createSidebarOverlay({
+                doc, onNavigate: (link, key) => onSidebarNav(s, link, key),
+                // The stage menu's Part item (B1): the players' quick settings.
+                items: [{
+                    id: 'part', label: 'Part', title: 'Part settings (P)',
+                    visible: () => scoring() === s && hasPartSheet(s),
+                    onSelect: () => openPart(s),
+                }],
+            })) || null;
         }
         refit();
         quietGuitarErrors(s);
@@ -956,8 +1216,20 @@ export function createBandRuntime({
     // key it takes. Settings and the leave prompt own the keys while they show.
     function onStageKey(e) {
         const s = scoring();
-        if (!e || !s || s.overlay || !s.sidebar) return;
+        if (!e || !s || s.overlay) return;
         if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+        // P opens and closes the Part sheet (from the sidebar too); the sheet owns Esc.
+        if (isPartSheetKey(e)) {
+            const sidebarEl = s.sidebar && s.sidebar.isOpen() ? doc.getElementById('v3-sidebar') : null;
+            if (otherModalOpen(doc, win, s.partSheet ? s.partSheet.el : sidebarEl)) return;
+            if (!s.partSheet && !hasPartSheet(s)) return;
+            e.preventDefault();
+            if (e.repeat) return;
+            if (s.partSheet) s.partSheet.close();
+            else openPart(s);
+            return;
+        }
+        if (s.partSheet || !s.sidebar) return;
         const isM = e.code === 'KeyM' || e.key === 'm' || e.key === 'M';
         const isEsc = e.key === 'Escape' && s.sidebar.isOpen();
         if (!isM && !isEsc) return;
@@ -978,7 +1250,45 @@ export function createBandRuntime({
         if (s.sidebar) s.sidebar.close();
         if (scoring() !== s) return;
         if (key === 'settings') openSettings(s);
-        else confirmLeave(s, () => { if (s.sidebar) s.sidebar.follow(link); });
+        // The user picked where to go: a solo session isn't sent to the Solo screen.
+        else confirmLeave(s, () => { s.leaveTarget = 'nav'; if (s.sidebar) s.sidebar.follow(link); });
+    }
+
+    // A session whose way out is the Solo screen: started by playSolo (the Solo
+    // screen or Play as), not a plain play RockHeroSmith adopted.
+    function soloScreenSession(s) {
+        return !!s && s.solo && !s.adopted;
+    }
+
+    // Where core's exit sends a session's song: band setup; the Solo screen (when
+    // built) for a playSolo session; where an adopted play came from (null: core decides).
+    function returnScreenFor(s) {
+        if (s.adopted) return s.origin || null;
+        if (soloScreenSession(s) && doc.getElementById(SOLO_SCREEN_ID)) return SOLO_SCREEN_ID;
+        return BAND_SCREEN;
+    }
+
+    // Core's own origin rule (session.js _resolvePlayerOrigin): the dashboard returns to Songs.
+    function originScreen(id) {
+        if ((id === 'home' || id === 'v3-home') && doc.getElementById('v3-songs')) return 'v3-songs';
+        return id;
+    }
+
+    // Leave (held Back): an adopted plain play leaves like a normal play (core's
+    // exit, back where the song came from); a playSolo session goes to the Solo
+    // screen through its hook, which leaves the player; a band session goes to band setup.
+    function leaveSong(s) {
+        if (s.adopted && typeof win.closeCurrentSong === 'function') {
+            s.leaveTarget = 'origin';
+            safe(() => win.closeCurrentSong());
+            return;
+        }
+        if (soloScreenSession(s) && typeof onShowSoloScreen === 'function') {
+            s.leaveTarget = 'solo';
+            safe(() => onShowSoloScreen({ next: false }));
+            return;
+        }
+        if (typeof win.showScreen === 'function') safe(() => win.showScreen(BAND_SCREEN));
     }
 
     function openSettings(s) {
@@ -994,6 +1304,92 @@ export function createBandRuntime({
         if (ov.loaded && typeof ov.loaded.then === 'function') {
             ov.loaded.then(() => { if (session === s && state.phase === 'playing') reapplyMastery(s); });
         }
+    }
+
+    // ---- The Part sheet and a live sound-mode switch (B1, plan phases 3-4) ----
+
+    // The song's stems: stems' own list, else the library item's.
+    function sheetStemIds(s) {
+        const ids = songStemIds();
+        return ids.length ? ids : songFacts(s.item).stemIds;
+    }
+
+    // The players with quick settings, each on its lane canvas.
+    function partPlayers(s) {
+        return safe(() => partSheetPlayers({
+            prefs: s.prefs, scoreParts: s.scoreParts, stemIds: sheetStemIds(s),
+            canvasFor: (id) => (id === 'drums' ? bandDrumCanvas(s)
+                : (stage && typeof stage.getLaneCanvas === 'function' ? safe(() => stage.getLaneCanvas(id)) : null)),
+        })) || [];
+    }
+
+    // Stream B3's section practice loop, feature-detected on this runtime (wired at
+    // integration): api.stopPractice(), and api.practiceActive() or the session's
+    // practice state (practice.js: mode 'off' when no loop runs). null without it.
+    function practiceControl(s) {
+        if (typeof api.stopPractice !== 'function') return null;
+        const active = () => (typeof api.practiceActive === 'function'
+            ? safe(() => api.practiceActive()) === true
+            : !!(s.practice && typeof s.practice.mode === 'string' && s.practice.mode !== 'off'));
+        return { active, stop: () => safe(() => api.stopPractice()) };
+    }
+
+    // Anything for the sheet: a player with quick settings, or a practice loop to stop.
+    function hasPartSheet(s) {
+        const pc = practiceControl(s);
+        return partPlayers(s).length > 0 || !!(pc && pc.active());
+    }
+
+    // Opens over the playing song and never pauses it. The sidebar shuts first.
+    function openPart(s) {
+        if (s.partSheet || s.overlay || scoring() !== s) return !!s.partSheet;
+        const players = partPlayers(s);
+        const practice = practiceControl(s);
+        if (!players.length && !(practice && practice.active())) return false;
+        if (s.sidebar && s.sidebar.isOpen()) s.sidebar.close();
+        const sheet = safe(() => openPartSheet({
+            doc, win, host: doc.getElementById('player'), players,
+            onSoundMode: (p, mode) => setSoundMode(s, p.id, mode),
+            practice,
+            onClose: () => { if (s.partSheet === sheet) s.partSheet = null; },
+        })) || null;
+        s.partSheet = sheet;
+        return !!sheet;
+    }
+
+    // A drummer's sound mode mid-song (contract §6): the session's prefs (with the
+    // no-drum-stem rule at Go), the saved prefs (that player's entry), and the sound
+    // rebuilt in place without restarting the song: the drum stem's mode, the stems'
+    // drop-out machine (claims that no longer apply are restored) and the pad mute.
+    function setSoundMode(s, id, mode) {
+        if (!DRUM_SOUND_MODES.includes(mode) || session !== s || !s.scoreParts.includes(id)) return false;
+        const next = withSoundMode(s.prefs, id, mode);
+        if (!next) return false;
+        s.prefs = sessionPrefs(next, s.item, songStemIds());
+        s.goPrefs = withSoundMode(s.goPrefs, id, mode) || s.goPrefs;
+        const c = id === 'drums' ? null : s.prefs.controllers.find((x) => x.id === id);
+        safe(() => {
+            const patch = soundModePatch(readSavedPrefs(storage), { id, controllerKey: c ? c.key : null }, mode, { solo: s.solo });
+            if (patch) savePrefs(patch, storage);
+        });
+        applySound(s);
+        return true;
+    }
+
+    function applySound(s) {
+        // The drum stem: a held claim the new mode doesn't want is restored.
+        s.drumSound = null;
+        startDrumSound(s);
+        if (!s.drumSound) syncDrumSound(s);
+        // Part audio: a fresh machine (failed players kept), then the stems it no longer has.
+        const held = [...s.stemSoundClaims];
+        s.stemSound = null;
+        startStemSound(s);
+        const now = s.stemSound ? s.stemSound.stems() : [];
+        syncStemSound(s, held.filter((stemId) => !now.includes(stemId)));
+        // Pads: muted only while every drummer's Rock Band drop-out applies.
+        if (padsMuted(drumModes(s))) startPadSound(s);
+        else releasePadSound(s);
     }
 
     // leave: what Leave does (follow a sidebar link, or back to the band screen).
@@ -1035,6 +1431,11 @@ export function createBandRuntime({
 
     // Settings or the leave prompt goes without a resume or a focus move.
     function closeOverlaySilently(s) {
+        if (s.partSheet) {
+            const ps = s.partSheet;
+            s.partSheet = null;
+            safe(() => ps.close({ silent: true }));
+        }
         if (s.overlay) {
             const o = s.overlay;
             s.overlay = null;
@@ -1137,8 +1538,15 @@ export function createBandRuntime({
             let arrIndex;
             if (isOn(s.prefs, 'guitar')) arrIndex = s.guitarIndex;
             else if (s.drumsOnly && s.drumIndex >= 0) arrIndex = s.drumIndex;
-            safe(() => fb.setReturnScreen(BAND_SCREEN));
-            s.setReturn = true;
+            // Play again on an adopted play: the arrangement it was playing.
+            if (arrIndex === undefined && Number.isInteger(s.replayArrangement)) arrIndex = s.replayArrangement;
+            // Where core's exit (Esc, End song, the song's end) goes: band setup; the
+            // Solo screen for a playSolo session; where an adopted play came from.
+            s.returnScreen = returnScreenFor(s);
+            if (s.returnScreen) {
+                safe(() => fb.setReturnScreen(s.returnScreen));
+                s.setReturn = true;
+            }
             // Splitscreen's playSong wrapper auto-starts from this pref; a band
             // session runs without it (teardown puts the saved value back).
             safe(() => storage.setItem(SPLIT_KEY, 'false'));
@@ -1166,6 +1574,7 @@ export function createBandRuntime({
                 s.controllersSettled = true;
                 s.prefs = settleControllers(s.prefs, s.connected);
             }
+            if (Number.isInteger(song.arrangementIndex)) s.loadedArrangement = song.arrangementIndex;
             const plan = planStage(song, s.prefs.parts, s.prefs.controllers);
             // Every session with a playable lane or the strip has a stage (R10).
             if (!plan.strip && plan.lanes.length === 0) return;
@@ -1237,6 +1646,7 @@ export function createBandRuntime({
             startOverdrive(s);
             startDrumSound(s);
             startStemSound(s);
+            startPadSound(s);
         },
         applyDevices(s) {
             Promise.resolve()
@@ -1299,6 +1709,10 @@ export function createBandRuntime({
         showResults(s) {
             const player = doc.getElementById('player');
             if (s.results) return;
+            const drumsSt = s.scoreParts.includes('drums') ? safe(() => drumsState(s)) : null;
+            // A song slowed down to its end was practice too (B3).
+            practiceDispatch(s, { type: 'rate', rate: playbackRate() });
+            const result = emitResult(s, drumsSt);
             // The sidebar is for the playing song only (plan 7 R21).
             if (s.sidebar) { const sb = s.sidebar; safe(() => sb.close()); }
             // So are Settings and the leave prompt: closed, resuming nothing.
@@ -1308,18 +1722,29 @@ export function createBandRuntime({
                 prefs: s.prefs,
                 song: { title: s.item.title, artist: s.item.artist },
                 oneLevel: !(s.readyDetail && s.readyDetail.hasPhraseData),
-                drumsExtra: drumsStarPower(s),
+                drumsExtra: drumsStarPower(drumsSt),
                 failed: s.bandFailed,
                 controllerInfo: controllerInfo(s),
+                sections: safe(() => sessionSections(s)) || {},
             }));
             s.results = model ? safe(() => showResultsScreen({
                 doc, win, host: player, model,
                 onAgain: () => dispatch({ type: 'again' }),
                 onNext: () => dispatch({ type: 'next' }),
+                onPractice: (p) => practiceFromResults(p),
             })) || null : null;
-            if (!s.results) { s.autoNext = true; dispatch({ type: 'next' }); }
+            if (!s.results) { s.autoNext = true; dispatch({ type: 'next' }); return; }
+            // Bests and recent runs per player (core's stats history; silent without it).
+            const shown = s.results;
+            if (result) {
+                s.history = safe(() => createHistoryLoader({
+                    getJson, fb, result,
+                    onView: (part, view) => { if (typeof shown.setHistory === 'function') shown.setHistory(part, view); },
+                })) || null;
+            }
         },
         hideResults(s) {
+            if (s.history) { const h = s.history; s.history = null; safe(() => h.dispose()); }
             if (!s.results) return;
             const r = s.results;
             s.results = null;
@@ -1331,6 +1756,8 @@ export function createBandRuntime({
             release = null;
         },
         teardown(s) {
+            // The pads first: nothing later in teardown can leave them muted.
+            releasePadSound(s);
             // Plan 7, first and silently: nothing resumes, every class and
             // attribute is undone, and full screen is left (Play again keeps it).
             closeOverlaySilently(s);
@@ -1404,10 +1831,18 @@ export function createBandRuntime({
             releaseDrumSound(s);
             releaseStemSound(s);
         },
-        releaseExit() {
+        releaseExit(s) {
             const r = release;
             release = null;
+            if (s) s.exitReleased = typeof r === 'function';
             if (typeof r === 'function') safe(r);
+        },
+        // Next song after an adopted plain play: core's exit, back where the song came
+        // from. Released by releaseExit; with no held exit (Band failed, an older
+        // core), core's closeCurrentSong.
+        exitToOrigin(s) {
+            if (s && s.exitReleased) return;
+            if (typeof win.closeCurrentSong === 'function') safe(() => win.closeCurrentSong());
         },
         showBandScreen(s) {
             const el = doc.getElementById(BAND_SCREEN);
@@ -1415,6 +1850,12 @@ export function createBandRuntime({
                 safe(() => win.showScreen(BAND_SCREEN));
             }
             if (!(s && s.autoNext)) safe(() => onShowBandScreen && onShowBandScreen());
+        },
+        // Next song after a solo session (contract §2): the Solo screen; without
+        // that hook, the band screen as before.
+        showSoloScreen(s) {
+            if (typeof onShowSoloScreen !== 'function') { EFFECTS.showBandScreen(s); return; }
+            safe(() => onShowSoloScreen({ next: !(s && s.autoNext) }));
         },
         // Play again: teardown left the plugins' displays hidden, so the
         // replayed session takes them over (no flash of their own HUDs).
@@ -1424,7 +1865,8 @@ export function createBandRuntime({
         // Play again: the same library item with the prefs Go was given, through
         // the normal Go path. Always the last effect: the session is idle by now.
         replay(s) {
-            const started = begin(s.item, s.goPrefs, s.keepHides ? s.hidden : null);
+            const started = begin(s.item, s.goPrefs, s.keepHides ? s.hidden : null,
+                { solo: s.solo, adopted: s.adopted, origin: s.origin, replayArrangement: s.adopted ? s.loadedArrangement : null });
             // Refused: nothing took the hides over, so they're undone here,
             // and nothing keeps the full screen the session before asked for.
             if (!started && s.keepHides) undoHides(s);
@@ -1456,18 +1898,24 @@ export function createBandRuntime({
         }
     }
 
-    function startSession({ song, prefs } = {}) {
-        return begin(song, prefs, null);
+    // solo: a one-player session (playSolo), whose Next song goes to the Solo screen.
+    function startSession({ song, prefs, solo = false } = {}) {
+        return begin(song, prefs, null, { solo: solo === true });
     }
 
     // hidden: the hides a replayed session inherits (undone at its teardown).
-    function begin(song, prefs, hidden) {
+    // replayArrangement: Play again on an adopted play loads the arrangement it played.
+    // adopted / origin: Play again on an adopted play stays adopted, returning where it came from.
+    function begin(song, prefs, hidden, { solo = false, adopted = false, origin = null, replayArrangement = null } = {}) {
         if (state.phase !== 'idle' || !song || !song.filename) return false;
-        const s = newSession(song, effectivePrefs(sessionPrefs(prefs, song), song, win, kinds), prefs);
+        adoptGen++;
+        const s = newSession(song, effectivePrefs(sessionPrefs(prefs, song), song, win, kinds), prefs, { solo, adopted });
+        s.replayArrangement = replayArrangement;
+        if (adopted) s.origin = origin;
         if (hidden) s.hidden = hidden;
         session = s;
         lanes.readConnected(s);
-        dispatch({ type: 'go', filename: song.filename });
+        dispatch({ type: 'go', filename: song.filename, solo: s.solo, adopted: s.adopted });
         if (state.phase === 'idle') return false;
         // Inside the Go (or Play again) click, so the request has user activation.
         if (s.full) safe(() => fullScreen.request());
@@ -1477,25 +1925,95 @@ export function createBandRuntime({
             if (session === s && state.phase === 'armed') {
                 dispatch({ type: 'left' });
                 // Our one-shot return override must not steer the next song.
-                if (s.setReturn && fb._nextReturnScreen === BAND_SCREEN) fb._nextReturnScreen = null;
+                if (s.setReturn && fb._nextReturnScreen === s.returnScreen) fb._nextReturnScreen = null;
             }
             throw e;
         });
     }
 
+    // Adopting a plain play (contract §2): a song ready outside a session asks
+    // `adopt` what it becomes; the answer applies only if nothing moved on meanwhile
+    // (no other song, no stop, no session started). Splitscreen plays are left alone.
+    function maybeAdopt(detail) {
+        if (typeof adopt !== 'function' || state.phase !== 'idle' || session || splitActive()) return;
+        const song = fb.currentSong;
+        if (!song || typeof song.filename !== 'string' || !song.filename) return;
+        const gen = ++adoptGen;
+        Promise.resolve().then(() => adopt(song)).then((answer) => {
+            if (!answer || gen !== adoptGen || state.phase !== 'idle' || session) return;
+            const cur = fb.currentSong;
+            if (!cur || cur.filename !== song.filename) return;
+            // { prefs, song } (the song with the facts the plugin knows), or bare prefs.
+            const prefs = answer.prefs || answer;
+            const item = answer.prefs && answer.song ? { ...song, ...answer.song, filename: song.filename } : song;
+            beginAdopted(item, prefs, detail);
+        }, (e) => console.warn('[rockherosmith] adopting the song failed', e));
+    }
+
+    // An adopt runs only with a scoring player: nobody able to play leaves the
+    // plain play alone, and a stage that loses its last player ends the session.
+    function beginAdopted(song, prefs, detail) {
+        const eff = effectivePrefs(sessionPrefs(prefs, song, songStemIds()), song, win, kinds);
+        if (playingIds(eff).length === 0) return;
+        const s = newSession(song, eff, prefs, { adopted: true });
+        s.origin = playerFrom;
+        // The song already shows on the drum view; the band never switches it.
+        s.drumView = false;
+        s.readyDetail = detail;
+        // The adopt picked controllers that are connected now: no list to wait for.
+        s.connected = new Set(eff.controllers.filter((c) => c.on === true).map((c) => c.key));
+        session = s;
+        dispatch({ type: 'adopt', filename: song.filename });
+        if (session === s && state.phase === 'playing' && !(s.score && s.scoreParts.length)) dispatch({ type: 'left' });
+    }
+
     const handlers = {
-        'song:loading': () => dispatch({ type: 'loading' }),
+        'song:loading': () => { adoptGen++; dispatch({ type: 'loading' }); },
         'song:ready': (e) => {
             const detail = (e && e.detail) || {};
+            if (state.phase === 'idle' && !session) { maybeAdopt(detail); return; }
             if (session) session.readyDetail = detail;
             const cur = fb.currentSong;
             dispatch({ type: 'ready', filename: cur && cur.filename, hasPhraseData: !!detail.hasPhraseData });
         },
-        'song:ended': () => dispatch({ type: 'ended' }),
-        'song:stop': () => dispatch({ type: 'left' }),
+        'song:ended': () => { adoptGen++; dispatch({ type: 'ended' }); },
+        'song:stop': () => { adoptGen++; dispatch({ type: 'left' }); },
         'screen:changing': (e) => {
             const d = (e && e.detail) || {};
-            if (d.from === 'player' && d.id !== 'player') dispatch({ type: 'left' });
+            if (d.id === 'player' && d.from && d.from !== 'player') playerFrom = originScreen(d.from);
+            if (d.from === 'player' && d.id !== 'player') {
+                // A playSolo session left mid-song (core's Esc or End song, to its
+                // return screen): the Solo screen once that screen shows. Not when the
+                // leave already went there, core returns to the Solo screen itself, or
+                // the user picked a sidebar link. An adopted play leaves like a normal play.
+                const s = session;
+                soloReturn = s && soloScreenSession(s) && !s.leaveTarget && typeof onShowSoloScreen === 'function'
+                    && d.id !== SOLO_SCREEN_ID
+                    && (state.phase === 'playing' || state.phase === 'armed') ? d.id : null;
+                adoptGen++;
+                dispatch({ type: 'left' });
+            }
+        },
+        'screen:changed': (e) => {
+            const d = (e && e.detail) || {};
+            if (!soloReturn || d.id === 'player') return;
+            const hit = d.id === soloReturn;
+            soloReturn = null;
+            if (hit) safe(() => onShowSoloScreen({ next: false }));
+        },
+        // A 5-fret lane's quick settings change on this session's lane (A4): the
+        // caller saves it (a band controller's entry, or the Solo choices).
+        // The session's own prefs follow it, so play:result reports the difficulty
+        // the lane ended the song on.
+        'five_fret:quick-setting': (e) => {
+            const s = session;
+            const d = e && e.detail;
+            const id = s && d ? lanes.laneOwner(s, d.canvas) : null;
+            if (!id) return;
+            const c = s.prefs.controllers.find((x) => x.id === id);
+            const patch = c ? quickSettingPatch(s.prefs, { ...d, controllerKey: c.key }) : null;
+            if (patch) s.prefs = { ...s.prefs, controllers: patch.controllers };
+            if (typeof onQuickSetting === 'function') safe(() => onQuickSetting(d, { solo: s.solo }));
         },
         // Band mode and splitscreen never run at once. Armed or playing,
         // splitscreen is stopped and the stage comes back; while ending, the
@@ -1514,17 +2032,42 @@ export function createBandRuntime({
         const s = scoring();
         if (!s) return;
         const canvas = bandDrumCanvas(s);
+        noteProDrums(s, e && e.detail, canvas);
         // A canvas the stage adopted without an announcement is hidden here.
         if (canvas && s.hidden.drums.size) hideDrumHud(s, canvas);
         // Drums never take an overdrive factor (R4): their points already
         // include the drums engine's own star-power doubling.
         record(s, drumsEntry(type, e && e.detail, displayTime(s), canvas));
         const d = e && e.detail;
-        if (!s.drumSound || !d || !canvas || d.canvas !== canvas) return;
+        if (!d || !canvas || d.canvas !== canvas || !s.scoreParts.includes('drums')) return;
         if (type === 'overhit' && songPaused(s)) return;
-        if (s.drumSound.judge(type)) syncDrumSound(s);
+        if (s.drumSound && s.drumSound.judge(type)) syncDrumSound(s);
+        // Rock Band with no drum stem: the full mix drops out, and a miss clunks
+        // (the pads are silent), as for a Rock Band controller (contract §6).
+        if (s.stemSound && s.stemSound.stems().includes(FULL_MIX) && s.prefs.parts.drums.soundMode === 'rockband') {
+            if (CLUNK_JUDGMENTS.includes(type) && s.prefs.missSound !== false && !s.failed.has('drums')) safe(() => missSound.play());
+            syncStemSound(s, s.stemSound.judge('drums', type));
+        }
     };
     for (const type of DRUM_JUDGMENTS) handlers['drums:' + type] = drumHandler(type);
+    // A drums judgment's detail.proDrums (when the drums plugin sends it), kept per
+    // player: the real drummer's canvas, or a drums controller's lane.
+    function noteProDrums(s, d, canvas) {
+        if (!d || typeof d.proDrums !== 'boolean' || !d.canvas) return;
+        const id = canvas && d.canvas === canvas ? 'drums' : lanes.laneOwner(s, d.canvas);
+        if (id) s.proDrumsSeen.set(id, d.proDrums);
+    }
+    // A drum solo's bonus (contract §4): points only, on the real drummer's canvas
+    // or a drums controller's lane.
+    handlers['drums:bonus'] = (e) => {
+        const s = scoring();
+        const d = e && e.detail;
+        if (!s || !d || !d.canvas) return;
+        const canvas = bandDrumCanvas(s);
+        if (canvas && d.canvas === canvas) { record(s, drumsBonusEntry(d, displayTime(s), canvas)); return; }
+        const id = lanes.laneOwner(s, d.canvas);
+        if (id) record(s, drumsBonusEntry(d, displayTime(s), d.canvas, id));
+    };
     // Deploys (R18): drums star power on the band's drum canvas, karaoke's overdrive.
     // A dropped-out part's deploy is recorded but ignored by the ledger (R12), so its
     // greyed lane gets no OVERDRIVE! callout.
@@ -1569,9 +2112,11 @@ export function createBandRuntime({
         if (s.drumSound && s.drumSound.seek()) syncDrumSound(s);
         // So do controllers' dropped stems (Review Focus 5).
         if (s.stemSound) syncStemSound(s, s.stemSound.seek());
-        // A loop wrap keeps the ledger; the looped phrases earn again (R8).
+        // A loop wrap: the looped phrases earn overdrive again (R8); the pass is
+        // practice and the ledger rewinds to the loop start (B3, practiceWrap).
         if (d.reason === 'loop-wrap') {
             if (s.od) { const od = s.od; safe(() => od.loopWrap(d.to)); }
+            practiceWrap(s, d);
             return;
         }
         if (!(d.to < d.from - REWIND_MIN_S)) return;
@@ -1582,6 +2127,10 @@ export function createBandRuntime({
         refreshHud(s, true);
         syncFailures(s, { silent: true });
     };
+    // A results "Practice this section" replay whose play resolved before it was
+    // ready starts its loop here (B3).
+    const readyBase = handlers['song:ready'];
+    handlers['song:ready'] = (e) => { readyBase(e); if (session) applyPracticePlan(session); };
     // Controller lanes (Ruling 9): one listener per event name for every kind.
     // A real part's handler on the same name (Plan 6's drums:*) keeps running first.
     for (const { name, type } of lanes.events) {
@@ -1645,6 +2194,7 @@ export function createBandRuntime({
         } else if (s.stemSound) {
             syncStemSound(s, s.stemSound.stems(), { force: true });
         }
+        startPadSound(s);
     }
     const winHandlers = {
         'notedetect:hit': onGuitarJudgment, 'notedetect:miss': onGuitarJudgment, 'notedetect:onset': onOnset,
@@ -1657,8 +2207,11 @@ export function createBandRuntime({
     if (winEvents) for (const [ev, fn] of Object.entries(winHandlers)) win.addEventListener(ev, fn);
     if (winEvents) win.addEventListener('keydown', onStageKey, true);
 
-    return {
+    const api = {
         dispose() {
+            // A pending adopt never lands on a disposed runtime.
+            adoptGen++;
+            adopt = null;
             dispatch({ type: 'left' });
             for (const [ev, fn] of Object.entries(handlers)) fb.off(ev, fn);
             if (winEvents) for (const [ev, fn] of Object.entries(winHandlers)) safe(() => win.removeEventListener(ev, fn));
@@ -1667,6 +2220,11 @@ export function createBandRuntime({
             safe(() => toasts.clear());
         },
         isMounted: () => !!stage,
+        // Whether this runtime can adopt plain plays (an adopt hook, not disposed).
+        canAdopt: () => typeof adopt === 'function',
+        // Whether a one-player session (solo or adopted) with a scoring player runs.
+        // The plugins hide their own HUD only then (rockHeroSmith.adoptsSolo).
+        soloActive: () => !!session && session.solo && state.phase !== 'idle' && !!session.score && session.scoreParts.length > 0,
         startSession,
         phase: () => state.phase,
         snapshot: () => (session && session.score ? session.score.snapshot() : null),
@@ -1676,6 +2234,12 @@ export function createBandRuntime({
         drumSound: () => (session && session.drumSound ? { mode: session.drumSound.mode, muted: session.soundClaim } : null),
         again: () => dispatch({ type: 'again' }),
         next: () => dispatch({ type: 'next' }),
+        // B3's section practice (the Part sheet's Stop practice): whether a loop or
+        // drill runs, and stopping it (clears core's loop, speed back to full).
+        practiceActive: () => !!(session && session.practice && session.practice.mode !== 'off'),
+        stopPractice: () => { if (session) practiceDispatch(session, { type: 'stop' }); },
+        openPartSheet: () => { const s = scoring(); return !!s && openPart(s); },
+        setSoundMode: (id, mode) => { const s = scoring(); return !!s && setSoundMode(s, id, mode); },
         // The stage's overlays for the current session (R22), or null.
         stageUi() {
             const s = session;
@@ -1685,7 +2249,9 @@ export function createBandRuntime({
                 fullScreen: fullScreen.isOn(),
                 sidebar: !!(s.sidebar && s.sidebar.isOpen()),
                 overlay: s.overlay ? s.overlay.kind : null,
+                partSheet: !!s.partSheet,
             };
         },
     };
+    return api;
 }

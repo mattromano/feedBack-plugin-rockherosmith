@@ -229,3 +229,26 @@ test('players with their own stem stay on it; without fullMix a stemless player 
     assert.deepEqual(split.stems(), []);
     assert.deepEqual(split.judge('ctl1', 'miss'), []);
 });
+
+// Play layer contract §6: the real drummer in Rock Band on a song with no drum stem
+// muffles the full mix like a Rock Band controller (a `dropout` member).
+test('a real drummer in Rock Band with no drum stem drops the full mix out', () => {
+    const drummer = { id: 'drums', stemId: null, controller: false, dropout: true, mode: 'rockband' };
+    const s = createStemSound({ members: [drummer], fullMix: true });
+    assert.deepEqual(s.stems(), [FULL_MIX]);
+    assert.deepEqual(s.judge('drums', 'miss'), [FULL_MIX]);
+    assert.equal(s.muted(FULL_MIX), true);
+    assert.deepEqual(s.judge('drums', 'hit'), [FULL_MIX]);
+    assert.deepEqual(s.judge('drums', 'overhit'), [FULL_MIX]);
+    assert.deepEqual(s.seek(), [FULL_MIX]);
+    // Its own fail never mutes the mix (only controllers' fail claims do).
+    assert.deepEqual(s.setFailed(['drums']), []);
+    // A guitar part on the mix keeps it playing.
+    const band = createStemSound({ members: [drummer, { id: 'guitar', stemId: null, controller: false }], fullMix: true });
+    assert.deepEqual(band.judge('drums', 'miss'), []);
+    // Song + pads keeps the mix; a drummer with its own stem is left to drum-sound.
+    const song = createStemSound({ members: [{ ...drummer, mode: 'song' }], fullMix: true });
+    assert.deepEqual(song.judge('drums', 'miss'), []);
+    const own = createStemSound({ members: [{ ...drummer, stemId: 'drums' }] });
+    assert.deepEqual(own.stems(), []);
+});

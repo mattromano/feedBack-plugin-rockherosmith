@@ -6,7 +6,7 @@ const st = (phase, filename = 'a.psarc') => ({ phase, filename });
 const step = (state, event) => reduceSession(state, event);
 
 test('initial state', () => {
-    assert.deepEqual(initialSession(), { phase: 'idle', filename: null });
+    assert.deepEqual(initialSession(), { phase: 'idle', filename: null, solo: false, adopted: false });
 });
 
 const rows = [
@@ -97,4 +97,78 @@ test('band failed ends the song into the results', () => {
     const idle = step(st('idle', null), { type: 'failed' });
     assert.equal(idle.state.phase, 'idle');
     assert.deepEqual(idle.effects, []);
+});
+
+// Play layer contract §2: a plain drums / 5-fret play adopted as a one-player session,
+// and Next song after a solo goes to the Solo screen.
+const ADOPT_EFFECTS = ['saveRestorePoint', 'mount', 'applyDifficulties', 'applyDevices'];
+
+test('idle adopt: straight to playing (the song is already loading), solo', () => {
+    const r = step(initialSession(), { type: 'adopt', filename: 'a.psarc' });
+    assert.deepEqual(r.state, { phase: 'playing', filename: 'a.psarc', solo: true, adopted: true });
+    assert.deepEqual(r.effects, ADOPT_EFFECTS);
+    assert.ok(!r.effects.includes('play'));
+});
+
+test('adopt only from idle', () => {
+    for (const phase of ['armed', 'playing', 'ending']) {
+        const r = step(st(phase), { type: 'adopt', filename: 'z' });
+        assert.equal(r.state.phase, phase);
+        assert.deepEqual(r.effects, []);
+    }
+});
+
+test('go carries solo; a band go is not solo', () => {
+    assert.equal(step(initialSession(), { type: 'go', filename: 'a' }).state.solo, false);
+    const solo = step(initialSession(), { type: 'go', filename: 'a', solo: true });
+    assert.equal(solo.state.solo, true);
+    const ready = step(solo.state, { type: 'ready', filename: 'a' });
+    assert.equal(ready.state.solo, true);
+    assert.equal(step(ready.state, { type: 'ended' }).state.solo, true);
+});
+
+test('Next song: solo sessions go to the Solo screen, band sessions to the band screen', () => {
+    const solo = step({ phase: 'ending', filename: 'a', solo: true }, { type: 'next' });
+    assert.deepEqual(solo.effects, ['hideResults', 'teardown', 'releaseExit', 'showSoloScreen']);
+    assert.deepEqual(solo.state, { phase: 'idle', filename: null, solo: false, adopted: false });
+    const band = step({ phase: 'ending', filename: 'a', solo: false }, { type: 'next' });
+    assert.deepEqual(band.effects, ['hideResults', 'teardown', 'releaseExit', 'showBandScreen']);
+});
+
+// Integration: an adopted plain play leaves like a normal play. Its Next song goes
+// back where the song came from (core's exit), never to the Solo or band screen.
+test('Next song after an adopted play: core\'s exit to where the song came from', () => {
+    const r = step({ phase: 'ending', filename: 'a', solo: true, adopted: true }, { type: 'next' });
+    assert.deepEqual(r.effects, ['hideResults', 'teardown', 'releaseExit', 'exitToOrigin']);
+    assert.deepEqual(r.state, { phase: 'idle', filename: null, solo: false, adopted: false });
+});
+
+test('adopted carries through the session; a Play again of an adopted play goes with adopted', () => {
+    let s = step(initialSession(), { type: 'adopt', filename: 'a' }).state;
+    s = step(s, { type: 'ended' }).state;
+    assert.equal(s.adopted, true);
+    assert.equal(step(initialSession(), { type: 'go', filename: 'a', solo: true }).state.adopted, false);
+    const replay = step(initialSession(), { type: 'go', filename: 'a', solo: true, adopted: true }).state;
+    assert.equal(replay.adopted, true);
+    assert.equal(step(step(replay, { type: 'ready', filename: 'a' }).state, { type: 'ended' }).state.adopted, true);
+});
+
+test('an adopted session ends like any other: seek-free leave, another song, the results', () => {
+    const adopt = { type: 'adopt', filename: 'a' };
+    const paths = {
+        'left while adopted': [adopt, { type: 'left' }],
+        'another song loads': [adopt, { type: 'loading' }],
+        'next after results': [adopt, { type: 'ended' }, { type: 'next' }],
+        'again after results': [adopt, { type: 'ended' }, { type: 'again' }],
+        'failed then left': [adopt, { type: 'failed' }, { type: 'left' }],
+    };
+    for (const [name, events] of Object.entries(paths)) {
+        let s = initialSession();
+        const effects = [];
+        for (const e of [...events, { type: 'left' }]) {
+            const r = step(s, e); s = r.state; effects.push(...r.effects);
+        }
+        assert.equal(effects.filter((x) => x === 'teardown').length, 1, name);
+        assert.equal(s.phase, 'idle', name);
+    }
 });

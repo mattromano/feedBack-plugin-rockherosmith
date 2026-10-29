@@ -453,3 +453,44 @@ test("dropPart doesn't turn a failed part's ignored deploy into a rescue", () =>
     assert.equal(s.parts.guitar.failed, true);
     assert.equal(s.bandFailed, true);
 });
+
+// Play layer contract §4: a bonus adds points only (no streak, multiplier, hit or crowd change).
+test('a bonus entry adds points only', () => {
+    const b = createBandScore({ parts: ['drums'] });
+    b.record({ part: 'drums', t: 1, kind: 'hit', points: 100, multiplier: 2, streak: 12 });
+    const before = b.snapshot().parts.drums;
+    b.record({ part: 'drums', t: 2, kind: 'bonus', points: 1000 });
+    const after = b.snapshot().parts.drums;
+    assert.equal(after.score, before.score + 1000);
+    for (const k of ['multiplier', 'streak', 'bestStreak', 'hits', 'misses', 'overhits', 'crowd', 'bonus']) {
+        assert.equal(after[k], before[k], k);
+    }
+    assert.equal(b.snapshot().bonus, before.bonus);
+});
+
+test('a bonus rewinds with the ledger and is ignored for a failed part', () => {
+    const b = createBandScore({ parts: ['drums'] });
+    b.record({ part: 'drums', t: 5, kind: 'bonus', points: 500 });
+    b.rewindTo(4);
+    assert.equal(b.snapshot().parts.drums.score, 0);
+    const f = createBandScore({ parts: ['drums'], failMode: 'fail' });
+    for (let i = 0; i < 20; i++) f.record({ part: 'drums', t: i, kind: 'miss', points: 0 });
+    assert.equal(f.snapshot().parts.drums.failed, true);
+    f.record({ part: 'drums', t: 30, kind: 'bonus', points: 500 });
+    assert.equal(f.snapshot().parts.drums.score, 0);
+});
+
+test('entries(): copies of the ledger, in order, after rewinds', () => {
+    const score = createBandScore({ parts: ['drums'] });
+    score.record({ part: 'drums', t: 1, kind: 'hit', points: 10, multiplier: 1, streak: 1 });
+    score.record({ part: 'drums', t: 2, kind: 'miss', points: 0, multiplier: 1, streak: 0 });
+    score.record({ part: 'nobody', t: 2, kind: 'hit', points: 10 });
+    const list = score.entries();
+    assert.deepEqual(list.map((e) => [e.t, e.kind]), [[1, 'hit'], [2, 'miss']]);
+    list[0].kind = 'miss';
+    list.push({ part: 'drums', t: 9, kind: 'hit' });
+    assert.equal(score.entries()[0].kind, 'hit');
+    assert.equal(score.entries().length, 2);
+    score.rewindTo(1.5);
+    assert.deepEqual(score.entries().map((e) => e.t), [1]);
+});
