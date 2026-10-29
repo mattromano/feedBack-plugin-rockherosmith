@@ -8,6 +8,8 @@
 export const DRUM_SOUND_MODES = ['song', 'rockband', 'kit'];
 // The modes' names (contract §6), for every UI that shows them.
 export const DRUM_SOUND_MODE_LABELS = Object.freeze({ rockband: 'Rock Band', song: 'Song + pads', kit: 'Kit only' });
+// The order every UI lists them in (contract §6).
+export const DRUM_SOUND_MODE_ORDER = Object.freeze(['rockband', 'song', 'kit']);
 
 // Rock Band plays without pad sounds: the drums plugin's pads are muted while every
 // drums player (the real drummer and drums controllers) is in Rock Band. A band

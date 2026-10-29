@@ -11,9 +11,9 @@ const UNAVAILABLE_NOTE = {
     vocals: 'No vocal pitch for this song',
 };
 const KARAOKE_OFF_NOTE = 'Turn on the Lyrics Karaoke plugin to sing';
-const SOUND_MODES_NOTE = 'Rock Band and My kit only need a drum stem';
-// An unsplit song: a controller's Rock Band muffles the whole song, My kit only has no stem.
-const KIT_NOTE = 'My kit only needs a drum stem';
+const SOUND_MODES_NOTE = 'Rock Band and Kit only need a drum stem';
+// An unsplit song: Rock Band muffles the whole song, Kit only has no stem.
+const KIT_NOTE = 'Kit only needs a drum stem';
 // A real drummer owns the drum stem (Ruling 9): a drums controller's Sound doesn't apply.
 const REAL_DRUMMER_SOUND_NOTE = "The drummer's sound mode sets the drum stem";
 // Guitar scores through note_detect, which the band turns on with an input picked.
@@ -21,6 +21,16 @@ const NOTE_DETECT_OFF_NOTE = 'Turn on Note Detection to score your guitar';
 const PICK_GUITAR_INPUT_NOTE = 'Pick an input to score your guitar';
 // The chartFrom fallback order (parts.js).
 const GUITAR_ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass'];
+
+// The drum sound modes a song's stems can't play (contract §6), for the real drummer
+// and drums controllers alike: Kit only needs a drum stem; Rock Band needs a drum
+// stem, or an unsplit song (no stems, or only `full`), whose whole mix it muffles.
+// A greyed mode plays as Song + pads.
+export function soundModesOff(stemIds) {
+    const ids = Array.isArray(stemIds) ? stemIds : [];
+    if (ids.includes('drums')) return [];
+    return isUnsplit(ids) ? ['kit'] : ['rockband', 'kit'];
+}
 
 // bandScreenModel({ prefs, item, vocalsSupported, noteDetectLoaded, pickAvailable })
 //   -> { goEnabled, goHint, pickEnabled, setupHint, columns: { guitar, drums, vocals } }
@@ -43,10 +53,13 @@ export function bandScreenModel({
         const unavailable = noKaraoke || (!!item && !hasChart(part, item, pp));
         const col = { on: !!pp.on, unavailable, note: unavailable ? (noKaraoke ? KARAOKE_OFF_NOTE : UNAVAILABLE_NOTE[part.id]) : '' };
         if (part.id === 'drums') {
-            col.soundModesDisabled = !!item && !songFacts(item).stemIds.includes('drums');
-            if (!unavailable && col.soundModesDisabled) col.note = SOUND_MODES_NOTE;
-            // The mode that will play: a song without a drum stem plays Song drums.
-            col.soundMode = col.soundModesDisabled ? 'song' : (pp.soundMode || 'song');
+            const ids = item ? songFacts(item).stemIds : null;
+            col.soundModeDisabled = ids ? soundModesOff(ids) : [];
+            col.soundModesDisabled = col.soundModeDisabled.length > 0;
+            if (!unavailable && col.soundModesDisabled) col.note = isUnsplit(ids) ? KIT_NOTE : SOUND_MODES_NOTE;
+            // The mode that will play: a greyed one plays Song + pads.
+            const stored = pp.soundMode || 'song';
+            col.soundMode = col.soundModeDisabled.includes(stored) ? 'song' : stored;
         }
         if (part.id === 'guitar') {
             const facts = songFacts(item);
@@ -92,7 +105,6 @@ const CONTROLLER_NOTES = {
     noPlugins: 'Install the 5-Fret or Drums plugin to play on a controller',
 };
 const FIVE_FRET_INSTRUMENTS = ['guitar', 'rhythm', 'bass'];
-const NO_STEM_SOUND_MODES = ['rockband', 'kit'];
 
 // One row per joined controller, in join order. `playsAs` is the kind it plays (null =
 // undecided: it sits out, its part fields are null and it never counts for Go or the pick).
@@ -101,8 +113,8 @@ const NO_STEM_SOUND_MODES = ['rockband', 'kit'];
 // the standard mapping (controllerStatus.standard), so X / B answer plays-as. `parts[p]`
 // is what the song has for p (a real chart beats an auto one; auto counts only with
 // showAuto) and who else holds p; `part` is the one that will play (the stored part when the song has it, else a
-// fallback). A drums row's `soundMode` is the one that will play: a song without a drum
-// stem plays Song drums, and soundModeDisabled lists the modes that need the stem.
+// fallback). A drums row's `soundMode` is the one that will play: a greyed mode plays
+// Song + pads, and soundModeDisabled lists the greyed ones (soundModesOff).
 function controllerRows({ prefs, item, fiveFretLoaded, drumsLoaded, controllerStatus, showAuto, realDrumsOn }) {
     const list = ((prefs && prefs.controllers) || []).filter(Boolean);
     const status = controllerStatus || {};
@@ -112,7 +124,6 @@ function controllerRows({ prefs, item, fiveFretLoaded, drumsLoaded, controllerSt
     const loaded = { five_fret: !!fiveFretLoaded, drums: !!drumsLoaded };
     const anyLoaded = loaded.five_fret || loaded.drums;
     const facts = item ? songFacts(item).fiveFret.filter((p) => showAuto || p.kind !== 'auto') : null;
-    const hasStem = !item || songFacts(item).stemIds.includes('drums');
     // An unsplit song (no stems, or only `full`): Rock Band part audio muffles the whole mix.
     const unsplit = !!item && isUnsplit(songFacts(item).stemIds);
     const effective = (c) => {
@@ -151,7 +162,7 @@ function controllerRows({ prefs, item, fiveFretLoaded, drumsLoaded, controllerSt
         const isDrums = playsAs === 'drums';
         const stemId = !isDrums && item && part ? stemIdFor('five_fret', { part }, songFacts(item).stemIds) : null;
         const partAudioDisabled = !isDrums && !!item && !!part && !stemId && !unsplit;
-        const soundModeDisabled = isDrums && !hasStem ? (unsplit ? ['kit'] : NO_STEM_SOUND_MODES.slice()) : [];
+        const soundModeDisabled = isDrums && item ? soundModesOff(songFacts(item).stemIds) : [];
         const storedMode = c.soundMode || 'rockband';
         const soundMode = soundModeDisabled.includes(storedMode) ? 'song' : storedMode;
         let note = '';

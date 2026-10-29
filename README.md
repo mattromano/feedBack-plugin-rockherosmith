@@ -65,9 +65,10 @@ The Solo screen is for playing alone: a band of one on the RockHeroSmith stage.
   muffles the whole song instead. Part audio is greyed when a split song has no stem for
   the part.
 - **On Confirm, Drums:** the part is Drums ("also:" names the other drummers), then the
-  difficulty and the Sound: **Song drums**, **Rock Band** or **My kit only**, as for the
-  real drummer. Rock Band and My kit only are greyed when a split song has no drum stem
-  (on an unsplit song only My kit only is). With
+  difficulty, the Sound: **Rock Band**, **Song + pads** or **Kit only**, as for the real
+  drummer, and the drums plugin's **Pad volume** (one setting for every kit). Rock Band
+  and Kit only are greyed when a split song has no drum stem (on an unsplit song only
+  Kit only is, for the real drummer too: Rock Band muffles the whole song). With
   the real drummer on, the drummer's own sound mode sets the drum stem and the controller's
   Sound doesn't apply (the row says so). A song with no drum chart says "No drum chart for
   this song" and the controller sits out.
@@ -104,6 +105,13 @@ The Solo screen is for playing alone: a band of one on the RockHeroSmith stage.
 - **`M` and the sidebar.** `M`, the Menu button or (in full mode) the left edge open the app
   sidebar over the song, which keeps playing. Esc, a click outside it or leaving it (when
   the edge opened it) closes it. With the sidebar shut, Esc leaves the song as usual.
+- **Part settings mid-song.** **P**, or **Part** at the top of the sidebar, opens the Part
+  sheet over the song, which keeps playing: for each drummer (the real kit and drums
+  controllers) and each 5-Fret controller, that plugin's quick settings for its lane
+  (difficulty, auto kick and cymbals, pro cymbals, timing, input offset, pad volume; for
+  5-Fret part, lefty and offset). A drummer's **Sound** (Rock Band, Song + pads, Kit only)
+  switches at once and is saved for that player. Esc, P or Back to the song closes it;
+  with a pad, its arrows move through it and B closes it.
 - **Settings mid-song.** The sidebar's Settings pauses the song and shows Settings over it.
   Esc or "Back to the song" closes it, puts the band guitar difficulty back and resumes only
   what was playing. Any other sidebar item pauses and asks "Leave the song?": Stay resumes,

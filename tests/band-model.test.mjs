@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bandScreenModel, isGoKey } from '../src/band-model.js';
+import { bandScreenModel, isGoKey, soundModesOff } from '../src/band-model.js';
 import { normalizePrefs } from '../src/prefs.js';
 
 const prefs = normalizePrefs({});
@@ -44,7 +44,31 @@ test('song without a drum stem disables sound modes 2 and 3', () => {
     const m = bandScreenModel({ prefs, item: { ...fullBand, stem_ids: ['guitar'] } });
     assert.equal(m.columns.drums.unavailable, false);
     assert.equal(m.columns.drums.soundModesDisabled, true);
-    assert.equal(m.columns.drums.note, 'Rock Band and My kit only need a drum stem');
+    assert.equal(m.columns.drums.note, 'Rock Band and Kit only need a drum stem');
+});
+
+test('soundModesOff: Kit only needs a drum stem; Rock Band a drum stem or an unsplit song', () => {
+    assert.deepEqual(soundModesOff(['guitar', 'drums']), []);
+    assert.deepEqual(soundModesOff(['guitar', 'bass']), ['rockband', 'kit']);
+    assert.deepEqual(soundModesOff([]), ['kit']);
+    assert.deepEqual(soundModesOff(['full']), ['kit']);
+    assert.deepEqual(soundModesOff(undefined), ['kit']);
+});
+
+test("the real drummer's sound modes on an unsplit song: Rock Band muffles the mix, Kit only is greyed", () => {
+    for (const stem_ids of [[], ['full']]) {
+        const rb = bandScreenModel({ prefs: withParts({ drums: { soundMode: 'rockband' } }), item: { ...fullBand, stem_ids } }).columns.drums;
+        assert.deepEqual(rb.soundModeDisabled, ['kit'], JSON.stringify(stem_ids));
+        assert.equal(rb.soundModesDisabled, true);
+        assert.equal(rb.soundMode, 'rockband');
+        assert.equal(rb.note, 'Kit only needs a drum stem');
+        const kit = bandScreenModel({ prefs: withParts({ drums: { soundMode: 'kit' } }), item: { ...fullBand, stem_ids } }).columns.drums;
+        assert.equal(kit.soundMode, 'song');
+    }
+    const split = bandScreenModel({ prefs: withParts({ drums: { soundMode: 'rockband' } }), item: { ...fullBand, stem_ids: ['guitar'] } }).columns.drums;
+    assert.deepEqual(split.soundModeDisabled, ['rockband', 'kit']);
+    assert.equal(split.soundMode, 'song');
+    assert.deepEqual(bandScreenModel({ prefs, item: null }).columns.drums.soundModeDisabled, []);
 });
 
 test('song without a drum chart greys drums; guitar alone still enables Go', () => {
@@ -281,7 +305,7 @@ test('an unsplit song keeps Rock Band part audio (it muffles the whole song); My
         assert.equal(rb.note, '');
         const kit = dmodel([dctl({ soundMode: 'kit' })], { item: unsplitDrums }).controllers[0];
         assert.equal(kit.soundMode, 'song');
-        assert.equal(kit.note, 'My kit only needs a drum stem');
+        assert.equal(kit.note, 'Kit only needs a drum stem');
     }
 });
 
@@ -355,7 +379,7 @@ test('sound modes greyed without a drum stem', () => {
     const noStem = dmodel([dctl({ soundMode: 'kit' })], { item: { ...drumSong, stem_ids: ['guitar'] } }).controllers[0];
     assert.deepEqual(noStem.soundModeDisabled, ['rockband', 'kit']);
     assert.equal(noStem.soundMode, 'song', 'plays as Song drums');
-    assert.equal(noStem.note, 'Rock Band and My kit only need a drum stem');
+    assert.equal(noStem.note, 'Rock Band and Kit only need a drum stem');
     const song = dmodel([dctl({ soundMode: 'song' })], { item: { ...drumSong, stem_ids: [] } }).controllers[0];
     assert.equal(song.soundMode, 'song');
     assert.equal(song.note, '');
@@ -374,7 +398,7 @@ test("with the real drummer on, a drums controller's row says the drummer's soun
     assert.equal(r.unavailable, false, 'it still plays');
     assert.equal(r.soundMode, 'kit', 'the stored mode stays');
     // A missing drum stem says so first; a 5-fret row and a real-drummer-less band say nothing.
-    assert.equal(realOn(dctl(), { ...drumSong, stem_ids: ['guitar'] }).note, 'Rock Band and My kit only need a drum stem');
+    assert.equal(realOn(dctl(), { ...drumSong, stem_ids: ['guitar'] }).note, 'Rock Band and Kit only need a drum stem');
     assert.equal(realOn(ctl({ key: 'pad#1' })).note, '');
     assert.equal(dmodel([dctl({ soundMode: 'kit' })]).controllers[0].note, '');
 });
