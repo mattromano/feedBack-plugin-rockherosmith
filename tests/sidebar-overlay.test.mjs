@@ -204,3 +204,52 @@ test('the CSS shows the sidebar and Settings over the player', async () => {
     assert.match(css, /body\.rhs-settings-over #settings \.fb-settings-back \{ display: none; \}/);
     assert.match(css, /#settings \.rhs-settings-back \{/);
 });
+
+// ---- Stage menu items (B1: the Part sheet) ----
+
+function withItems(items) {
+    const doc = makeDoc();
+    const sidebar = doc.createElement('aside');
+    sidebar.id = 'v3-sidebar';
+    doc.body.appendChild(sidebar);
+    const link = doc.createElement('a');
+    link.setAttribute('data-v3-nav', 'songs');
+    sidebar.appendChild(link);
+    const overlay = createSidebarOverlay({ doc, onNavigate() {}, items });
+    return { doc, sidebar, link, overlay };
+}
+
+test('stage menu items show at the top of the sidebar only while it is open', () => {
+    const picked = [];
+    let shown = true;
+    const { sidebar, link, overlay } = withItems([
+        { id: 'part', label: 'Part', title: 'Part settings (P)', visible: () => shown, onSelect: () => picked.push('part') },
+    ]);
+    assert.equal(sidebar.querySelector('.rhs-sidebar-item'), null);
+    overlay.open();
+    const item = sidebar.querySelector('.rhs-sidebar-item');
+    assert.ok(item);
+    assert.equal(sidebar.children[0], item, 'first, above the nav');
+    assert.equal(sidebar.children[1], link);
+    assert.equal(item.tagName, 'BUTTON');
+    assert.equal(item.getAttribute('data-rhs-item'), 'part');
+    assert.equal(item.textContent, 'Part');
+    assert.equal(item.getAttribute('title'), 'Part settings (P)');
+    item.click();
+    assert.deepEqual(picked, ['part']);
+    assert.equal(overlay.isOpen(), false, 'picking an item closes the sidebar first');
+    assert.equal(sidebar.querySelector('.rhs-sidebar-item'), null, 'and takes the items out');
+    shown = false;
+    overlay.open();
+    assert.equal(sidebar.querySelector('.rhs-sidebar-item'), null, 'a hidden item is left out');
+    overlay.close();
+    overlay.destroy();
+});
+
+test('an item that throws on select still leaves the sidebar closed', () => {
+    const { sidebar, overlay } = withItems([{ id: 'x', label: 'X', onSelect: () => { throw new Error('boom'); } }]);
+    overlay.open();
+    sidebar.querySelector('.rhs-sidebar-item').click();
+    assert.equal(overlay.isOpen(), false);
+    overlay.destroy();
+});
