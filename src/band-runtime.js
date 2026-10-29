@@ -163,6 +163,8 @@ export function createBandRuntime({
     // a started session drops a pending adopt (its generation moves on).
     let sessionCount = 0;
     let adoptGen = 0;
+    // The generation of the adopt still waiting for its answer, or null.
+    let adoptPending = null;
     // Per-session runtime data the pure reducer does not hold.
     let session = null;
     let stage = null;
@@ -510,12 +512,10 @@ export function createBandRuntime({
     // The drums plugin is loaded (its API or its renderer is there).
     const drumsPluginLoaded = () => !!win.feedBackDrums || typeof win.feedBackViz_drums === 'function';
 
-    // Drums' star power phrases for the results, from the band's drum canvas.
-    function drumsStarPower(s) {
-        const api = win.feedBackDrums;
-        const canvas = bandDrumCanvas(s);
-        if (!canvas || !api || typeof api.getInstanceState !== 'function') return null;
-        const sp = safe(() => { const st = api.getInstanceState(canvas); return st && st.starPower; });
+    // Drums' star power phrases for the results, from the drum engine's state
+    // (drumsState, read once for the results).
+    function drumsStarPower(st) {
+        const sp = st && st.starPower;
         if (!sp || !Number.isFinite(sp.phrasesHit) || !Number.isFinite(sp.phrasesTotal)) return null;
         return { phrasesHit: sp.phrasesHit, phrasesTotal: sp.phrasesTotal };
     }
@@ -576,7 +576,8 @@ export function createBandRuntime({
     }
 
     // play:result (contract §3), once per session, when the results open.
-    function emitResult(s) {
+    // drumsSt: the real drummer's engine state, already read for the results.
+    function emitResult(s, drumsSt) {
         if (s.resultSent || typeof fb.emit !== 'function') return;
         s.resultSent = true;
         const arrangements = {};
@@ -585,9 +586,17 @@ export function createBandRuntime({
             if (id === 'guitar' && Number.isInteger(s.guitarIndex)) arrangements[id] = s.guitarIndex;
             else if (Number.isInteger(s.loadedArrangement)) arrangements[id] = s.loadedArrangement;
         }
+        // Pro cymbals per drums player, from its engine state (drums getInstanceState
+        // reports proDrums; a drums plugin that doesn't counts as not pro).
+        const proDrums = {};
+        for (const id of s.scoreParts) {
+            const st = id === 'drums' ? drumsSt
+                : (isControllerId(id) ? safe(() => lanes.laneState(s, id)) : null);
+            if (st && st.proDrums === true) proDrums[id] = true;
+        }
         const detail = resultEvent({
             filename: s.item.filename, sessionId: s.sessionId,
-            snapshot: s.score ? s.score.snapshot() : null, prefs: s.prefs, arrangements,
+            snapshot: s.score ? s.score.snapshot() : null, prefs: s.prefs, arrangements, proDrums,
             practice: false, durationSec: displayTime(s),
         });
         safe(() => fb.emit('play:result', detail));
@@ -1400,7 +1409,8 @@ export function createBandRuntime({
         showResults(s) {
             const player = doc.getElementById('player');
             if (s.results) return;
-            emitResult(s);
+            const drumsSt = s.scoreParts.includes('drums') ? safe(() => drumsState(s)) : null;
+            emitResult(s, drumsSt);
             // The sidebar is for the playing song only (plan 7 R21).
             if (s.sidebar) { const sb = s.sidebar; safe(() => sb.close()); }
             // So are Settings and the leave prompt: closed, resuming nothing.
@@ -1410,7 +1420,7 @@ export function createBandRuntime({
                 prefs: s.prefs,
                 song: { title: s.item.title, artist: s.item.artist },
                 oneLevel: !(s.readyDetail && s.readyDetail.hasPhraseData),
-                drumsExtra: drumsStarPower(s),
+                drumsExtra: drumsStarPower(drumsSt),
                 failed: s.bandFailed,
                 controllerInfo: controllerInfo(s),
             }));
@@ -1605,12 +1615,15 @@ export function createBandRuntime({
         const song = fb.currentSong;
         if (!song || typeof song.filename !== 'string' || !song.filename) return;
         const gen = ++adoptGen;
+        adoptPending = gen;
+        const settle = () => { if (adoptPending === gen) adoptPending = null; };
         Promise.resolve().then(() => adopt(song)).then((prefs) => {
+            settle();
             if (!prefs || gen !== adoptGen || state.phase !== 'idle' || session) return;
             const cur = fb.currentSong;
             if (!cur || cur.filename !== song.filename) return;
             beginAdopted(song, prefs, detail);
-        }, (e) => console.warn('[rockherosmith] adopting the song failed', e));
+        }, (e) => { settle(); console.warn('[rockherosmith] adopting the song failed', e); });
     }
 
     function beginAdopted(song, prefs, detail) {
@@ -1837,6 +1850,12 @@ export function createBandRuntime({
             safe(() => toasts.clear());
         },
         isMounted: () => !!stage,
+        // Whether this runtime can adopt plain plays (an adopt hook, not disposed).
+        canAdopt: () => typeof adopt === 'function',
+        // Whether this play is (or is about to be) a one-player session: an adopt
+        // waiting for its answer, or a solo / adopted session running. The plugins
+        // hide their own HUD only then (rockHeroSmith.adoptsSolo).
+        soloActive: () => (adoptPending !== null && adoptPending === adoptGen) || (!!session && session.solo && state.phase !== 'idle'),
         startSession,
         phase: () => state.phase,
         snapshot: () => (session && session.score ? session.score.snapshot() : null),

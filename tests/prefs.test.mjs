@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
     loadPrefs, savePrefs, normalizePrefs, pushRecent, clampZoom,
     MIC_HIT_DB_MIN, MIC_HIT_DB_MAX, MIC_HIT_DB_STEP, MIC_HIT_DB_DEFAULT, clampMicHitDb,
-    migrateLegacyPrefs, LEGACY_KEY,
+    migrateLegacyPrefs, LEGACY_KEY, createPrefsCache,
 } from '../src/prefs.js';
 
 function stub(initial = {}) {
@@ -323,4 +323,29 @@ test('savePrefs merges solo shallowly', () => {
     assert.deepEqual(loadPrefs(s).solo, next.solo);
     assert.equal(savePrefs({ adoptSolo: false }, s).adoptSolo, false);
     assert.equal(loadPrefs(s).solo.part, 'bass');
+});
+
+test('createPrefsCache: loads once, again after a savePrefs or a storage event for the key', () => {
+    const s = stub({});
+    let loads = 0;
+    const win = new EventTarget();
+    const cache = createPrefsCache({ load: () => { loads++; return loadPrefs(s); }, win });
+    for (let i = 0; i < 100; i++) assert.equal(cache.get().adoptSolo, true);
+    assert.equal(loads, 1);
+    savePrefs({ adoptSolo: false }, s);
+    assert.equal(cache.get().adoptSolo, false);
+    assert.equal(loads, 2);
+    const ev = (key) => { const e = new Event('storage'); e.key = key; return e; };
+    win.dispatchEvent(ev('other.key'));
+    cache.get();
+    assert.equal(loads, 2, 'another key keeps the cache');
+    win.dispatchEvent(ev(KEY));
+    cache.get();
+    assert.equal(loads, 3);
+    cache.dispose();
+    win.dispatchEvent(ev(KEY));
+    cache.get();
+    assert.equal(loads, 4, 'disposed: loads again (nothing cached)');
+    cache.get();
+    assert.equal(loads, 4);
 });

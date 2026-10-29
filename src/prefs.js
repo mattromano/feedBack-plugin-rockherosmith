@@ -5,6 +5,8 @@ import { CONTROLLER_KINDS, PART_AUDIO_MODES, isControllerId } from './controller
 import { DRUM_SOUND_MODES } from './drum-sound.js';
 
 const KEY = 'rockherosmith.prefs.v1';
+// Bumped by every savePrefs, so a prefs cache knows to load again.
+let saveVersion = 0;
 // Pre-rename key (the old Build-a-Band key): copied to KEY on first load, never removed.
 export const LEGACY_KEY = 'build_a_band.prefs.v1';
 
@@ -252,5 +254,27 @@ export function savePrefs(patch, storage = defaultStorage()) {
     try {
         if (storage) storage.setItem(KEY, JSON.stringify(next));
     } catch (_) { /* quota / denied: keep in-memory result */ }
+    saveVersion++;
     return next;
+}
+
+// The prefs kept in memory, for readers on a hot path (rockHeroSmith.adoptsSolo is
+// asked every frame): loaded once, and again after any savePrefs or a `storage` event
+// for the prefs key (another window). -> { get(), dispose() }
+export function createPrefsCache({ load = () => loadPrefs(), win } = {}) {
+    let cur = null;
+    let ver = -1;
+    const onStorage = (e) => { if (!e || e.key === null || e.key === undefined || e.key === KEY) cur = null; };
+    const listens = !!win && typeof win.addEventListener === 'function';
+    if (listens) win.addEventListener('storage', onStorage);
+    return {
+        get() {
+            if (!cur || ver !== saveVersion) { cur = load(); ver = saveVersion; }
+            return cur;
+        },
+        dispose() {
+            if (listens && typeof win.removeEventListener === 'function') win.removeEventListener('storage', onStorage);
+            cur = null;
+        },
+    };
 }

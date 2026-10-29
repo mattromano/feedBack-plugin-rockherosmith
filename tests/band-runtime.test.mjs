@@ -4811,6 +4811,7 @@ test('play:result once when the results open, never on leaving mid-song; a new s
     assert.deepEqual([p.player, p.instrument, p.part, p.input, p.difficulty, p.hits, p.misses, p.accuracy, p.fullCombo, p.arrangement],
         ['drums', 'drums', 'drums', 'kit', 'hard', 1, 0, 1, true, null]);
     assert.deepEqual(p.sections, []);
+    assert.deepEqual([p.proDrums, p.failed], [false, false]);
     rt.again();
     await flush();
     loadSong(DRUM_ITEM);
@@ -5015,4 +5016,36 @@ test('five_fret:quick-setting on a session lane reaches onQuickSetting with solo
     env.fb.emit('five_fret:quick-setting', { canvas: env.doc.createElement('canvas'), key: 'difficulty', value: 'easy', lane: true });
     assert.deepEqual(got, [['difficulty', 'hard', false]]);
     env.rt.dispose();
+});
+
+test('play:result proDrums reads the drums engine state at the results', () => {
+    const env = setup();
+    const got = playEvents(env.fb);
+    env.od.drums = { proDrums: true };
+    env.rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    env.loadSong(DRUM_ITEM);
+    env.fb.emit('song:ended', {});
+    assert.equal(got.result[0].players[0].proDrums, true);
+    env.rt.dispose();
+});
+
+test('soloActive: while an adopt waits, while a solo or adopted session runs; never for a band or a refused adopt', async () => {
+    const { env } = adoptEnv();
+    const { rt, loadSong, fb } = env;
+    assert.equal(rt.soloActive(), false);
+    loadSong(DRUM_ITEM);
+    assert.equal(rt.soloActive(), true, 'pending');
+    await flush();
+    assert.equal(rt.soloActive(), true, 'adopted');
+    fb.emit('song:stop', {});
+    assert.equal(rt.soloActive(), false);
+    rt.startSession({ song: DRUM_ITEM, prefs: prefsWith() });
+    loadSong(DRUM_ITEM);
+    assert.equal(rt.soloActive(), false, 'a band session');
+    rt.dispose();
+    const off = adoptEnv({ adoptPrefs: null });
+    off.env.loadSong(DRUM_ITEM);
+    await flush();
+    assert.equal(off.env.rt.soloActive(), false);
+    off.env.rt.dispose();
 });

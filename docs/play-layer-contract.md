@@ -22,10 +22,15 @@ rockHeroSmith.playSolo(item, { kind, part?, difficulty? })
   //       'drums'      a drums game controller / plastic kit
   //       'five_fret'  a 5-fret controller; part 'guitar' | 'rhythm' | 'bass'
   // -> Promise<'started' | 'setup' | false>   (unchanged meaning)
-rockHeroSmith.soloKindFor(song) -> 'kit' | 'drums' | null
+rockHeroSmith.soloKindFor(song) -> Promise<'kit' | 'drums' | null>
   // what the drums Play-as should use: 'kit' when feedBackDrums.midiInput()
-  // is connected, else 'drums' when a drums controller is connected, else null
-rockHeroSmith.openSolo(opts?)   // shows the Solo screen (stream B2)
+  // is connected (after feedBackDrums.whenMidiReady() when present), else
+  // 'drums' when a game controller is connected, else null
+rockHeroSmith.openSolo(opts?)   // shows the Solo screen (stream B2); { next: true } from Results
+rockHeroSmith.adoptsSolo() -> boolean
+  // true only while RockHeroSmith scores the plain play on the main #highway: prefs.adoptSolo
+  // on, no splitscreen, and an adopt pending or a solo / adopted session running. Cheap
+  // (in-memory prefs): the plugins ask every frame and hide their own HUD only when true
 ```
 
 - `kind: 'kit'` builds prefs with `parts.drums.on = true` (deviceKey = saved
@@ -72,6 +77,8 @@ Emitted only by RockHeroSmith. Core and plugins consume these, never `drums:*` /
     score, stars, accuracy,              // accuracy 0..1 = hits / (hits + misses)
     hits, misses, overhits, bestStreak,
     fullCombo: boolean,
+    proDrums: boolean,                   // pro cymbals in effect (drums players; false otherwise)
+    failed: boolean,                     // dropped out in fail mode (rescued or not)
     sections: [{ name, start, end, hits, misses, accuracy }]   // [] until B3
   }],
   durationSec

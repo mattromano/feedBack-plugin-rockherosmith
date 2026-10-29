@@ -55,7 +55,7 @@ test('resultEvent: one row per playing player from the snapshot', () => {
         players: [{
             player: 'drums', instrument: 'drums', part: 'drums', input: 'kit', difficulty: 'expert', arrangement: 2,
             score: 200, stars: null, accuracy: 2 / 3, hits: 2, misses: 1, overhits: 1, bestStreak: 2,
-            fullCombo: false, sections: [],
+            fullCombo: false, proDrums: false, failed: false, sections: [],
         }],
     });
 });
@@ -81,4 +81,17 @@ test('sessionIdFor: unique per session', () => {
     const b = sessionIdFor(1000, 2);
     assert.equal(typeof a, 'string');
     assert.notEqual(a, b);
+});
+
+test('resultEvent: proDrums for drums players only; failed for a player who failed out', () => {
+    const score = createBandScore({ parts: ['drums', 'ctl1', 'ctl2'], failMode: 'fail' });
+    for (let i = 0; i < 20; i++) score.record({ part: 'ctl1', t: i, kind: 'miss', points: 0 });
+    const ev = resultEvent({ filename: 'a', sessionId: 's', snapshot: score.snapshot(), prefs,
+        proDrums: { drums: true, ctl1: true, ctl2: true } });
+    const by = Object.fromEntries(ev.players.map((p) => [p.player, p]));
+    assert.equal(by.drums.proDrums, true);
+    assert.equal(by.ctl2.proDrums, true, 'a drums controller');
+    assert.equal(by.ctl1.proDrums, false, 'a 5-fret player never');
+    assert.deepEqual([by.ctl1.failed, by.drums.failed], [true, false]);
+    assert.equal(resultEvent({ filename: 'a', sessionId: 's', snapshot: score.snapshot(), prefs }).players[0].proDrums, false);
 });
