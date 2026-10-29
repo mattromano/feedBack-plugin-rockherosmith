@@ -187,14 +187,32 @@ export function currentViz(win, doc) {
     return ADOPT_VIEWS.find((id) => matches(win, id, info)) || null;
 }
 
+// A plugin difficulty id as a stage difficulty (the stage has no Expert+), or undefined.
+function stageDifficulty(v) {
+    if (v === 'expert_plus') return 'expert';
+    return DIFFICULTIES.includes(v) ? v : undefined;
+}
+
+// The difficulty the player picked in the plugin for `canvas`: its getDifficulty(canvas)
+// when it has one, else `state.difficulty`; undefined when neither gives a valid one.
+function pluginDifficulty(api, canvas, state) {
+    if (api && typeof api.getDifficulty === 'function' && canvas) {
+        const d = stageDifficulty(safe(() => api.getDifficulty(canvas)));
+        if (d) return d;
+    }
+    return stageDifficulty(state && state.difficulty);
+}
+
+const highwayOf = (doc) => (doc && typeof doc.getElementById === 'function' ? doc.getElementById('highway') : null);
+
 function matches(win, id, info) {
     const f = win && win['feedBackViz_' + id];
     return !!f && typeof f.matchesArrangement === 'function' && safe(() => f.matchesArrangement(info)) === true;
 }
 
 // What a plain play on the main highway would be adopted as: the drum view on a drum
-// part -> { kind: 'drums' }; the 5-fret view -> { kind: 'five_fret', controllerKey?, part? }
-// (the controller playing it, when its instance reports one); else null.
+// part -> { kind: 'drums' }; the 5-fret view -> { kind: 'five_fret', controllerKey?, part?,
+// difficulty? } (the controller playing it and its pick, when its instance reports them); else null.
 export function adoptTarget(win, doc) {
     const viz = currentViz(win, doc);
     if (viz === 'drums') {
@@ -203,9 +221,11 @@ export function adoptTarget(win, doc) {
     }
     if (viz === 'five_fret') {
         const api = win && win.feedBackFiveFret;
-        const canvas = doc && typeof doc.getElementById === 'function' ? doc.getElementById('highway') : null;
+        const canvas = highwayOf(doc);
         const st = api && typeof api.getInstanceState === 'function' && canvas ? safe(() => api.getInstanceState(canvas)) : null;
         const out = { kind: 'five_fret' };
+        const difficulty = pluginDifficulty(api, canvas, st);
+        if (difficulty) out.difficulty = difficulty;
         if (st && typeof st.controllerKey === 'string' && st.controllerKey) out.controllerKey = st.controllerKey;
         if (st && CONTROLLER_KINDS.five_fret.parts.includes(st.instrument)) out.part = st.instrument;
         return out;
@@ -225,17 +245,20 @@ export function createAdopt({ win, doc, loadPrefs, kinds = CONTROLLER_KINDS }) {
         if (!saved || saved.adoptSolo !== true) return null;
         const target = adoptTarget(win, doc);
         if (!target) return null;
+        // The player's own pick in the plugin wins over RockHeroSmith's saved difficulty.
         if (target.kind === 'drums') {
-            await midiReady(win.feedBackDrums);
-            const m = midiInput(win.feedBackDrums);
-            const kit = () => soloPrefs(saved, { kind: 'kit', deviceKey: m && typeof m.key === 'string' ? m.key : '' });
+            const drums = win.feedBackDrums;
+            await midiReady(drums);
+            const m = midiInput(drums);
+            const difficulty = pluginDifficulty(drums, highwayOf(doc), null);
+            const kit = () => soloPrefs(saved, { kind: 'kit', difficulty, deviceKey: m && typeof m.key === 'string' ? m.key : '' });
             if (m && m.connected) return kit();
             const ctl = await pickSoloController('drums', kinds);
-            return ctl ? soloPrefs(saved, { kind: 'drums', ...ctl }) : kit();
+            return ctl ? soloPrefs(saved, { kind: 'drums', difficulty, ...ctl }) : kit();
         }
         const ctl = target.controllerKey ? { controllerKey: target.controllerKey } : await pickSoloController('five_fret', kinds);
         if (!ctl) return null;
-        return soloPrefs(saved, { kind: 'five_fret', part: target.part, ...ctl });
+        return soloPrefs(saved, { kind: 'five_fret', part: target.part, difficulty: target.difficulty, ...ctl });
     };
 }
 

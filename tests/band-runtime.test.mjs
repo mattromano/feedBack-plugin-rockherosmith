@@ -5049,3 +5049,32 @@ test('soloActive: while an adopt waits, while a solo or adopted session runs; ne
     assert.equal(off.env.rt.soloActive(), false);
     off.env.rt.dispose();
 });
+
+test('play:result proDrums falls back to the drums judgment detail when the state has none', async () => {
+    const env = setup();
+    const got = playEvents(env.fb);
+    env.rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    env.loadSong(DRUM_ITEM);
+    env.fb.emit('drums:hit', drEv(env.highwayCanvas, { points: 10, proDrums: true }));
+    env.fb.emit('song:ended', {});
+    assert.equal(got.result[0].players[0].proDrums, true);
+    env.rt.dispose();
+    // A state that says false wins over an older event.
+    const s2 = setup();
+    const g2 = playEvents(s2.fb);
+    s2.od.drums = { proDrums: false };
+    s2.rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    s2.loadSong(DRUM_ITEM);
+    s2.fb.emit('drums:hit', drEv(s2.highwayCanvas, { points: 10, proDrums: true }));
+    s2.fb.emit('song:ended', {});
+    assert.equal(g2.result[0].players[0].proDrums, false);
+    s2.rt.dispose();
+    // A drums controller lane's detail.
+    const c = setup();
+    const g3 = playEvents(c.fb);
+    await goCtl(c, padPrefs([KIT1], noRealDrums), DRUM_ITEM);
+    c.fb.emit('drums:hit', drEv(c.mounts[0].ctlCanvas.ctl1, { points: 10, proDrums: true }));
+    c.fb.emit('song:ended', {});
+    assert.equal(g3.result[0].players.find((p) => p.player === 'ctl1').proDrums, true);
+    c.rt.dispose();
+});

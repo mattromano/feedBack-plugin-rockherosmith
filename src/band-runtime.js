@@ -214,6 +214,9 @@ export function createBandRuntime({
             solo: solo || adopted,
             adopted,
             loadedArrangement: null,
+            // Pro cymbals per drums player as its judgments last reported them
+            // (detail.proDrums), for play:result when the engine state has none.
+            proDrumsSeen: new Map(),
             resultSent: false,
             padsMuted: false,
             // The guitar part's arrangement, with the Lead fallback.
@@ -592,7 +595,8 @@ export function createBandRuntime({
         for (const id of s.scoreParts) {
             const st = id === 'drums' ? drumsSt
                 : (isControllerId(id) ? safe(() => lanes.laneState(s, id)) : null);
-            if (st && st.proDrums === true) proDrums[id] = true;
+            const pro = st && typeof st.proDrums === 'boolean' ? st.proDrums : s.proDrumsSeen.get(id);
+            if (pro === true) proDrums[id] = true;
         }
         const detail = resultEvent({
             filename: s.item.filename, sessionId: s.sessionId,
@@ -1677,6 +1681,7 @@ export function createBandRuntime({
         const s = scoring();
         if (!s) return;
         const canvas = bandDrumCanvas(s);
+        noteProDrums(s, e && e.detail, canvas);
         // A canvas the stage adopted without an announcement is hidden here.
         if (canvas && s.hidden.drums.size) hideDrumHud(s, canvas);
         // Drums never take an overdrive factor (R4): their points already
@@ -1694,6 +1699,13 @@ export function createBandRuntime({
         }
     };
     for (const type of DRUM_JUDGMENTS) handlers['drums:' + type] = drumHandler(type);
+    // A drums judgment's detail.proDrums (when the drums plugin sends it), kept per
+    // player: the real drummer's canvas, or a drums controller's lane.
+    function noteProDrums(s, d, canvas) {
+        if (!d || typeof d.proDrums !== 'boolean' || !d.canvas) return;
+        const id = canvas && d.canvas === canvas ? 'drums' : lanes.laneOwner(s, d.canvas);
+        if (id) s.proDrumsSeen.set(id, d.proDrums);
+    }
     // A drum solo's bonus (contract §4): points only, on the real drummer's canvas
     // or a drums controller's lane.
     handlers['drums:bonus'] = (e) => {

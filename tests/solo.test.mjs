@@ -298,3 +298,41 @@ test('quickSettingPatch: a band lane change saves into that controller entry; a 
         { solo: { part: 'rhythm' } });
     assert.equal(quickSettingPatch(prefs, { controllerKey: 'New#1', key: 'lefty', value: true, lane: true }, { solo: true }), null);
 });
+
+// The player's own difficulty wins when adopting (coordinator ruling on open question 3).
+test('createAdopt: the drums plugin difficulty on #highway (Expert+ is Expert), else the saved one', async () => {
+    const d = vizWin({ picker: 'drums' });
+    const asked = [];
+    d.win.feedBackDrums = { midiInput: () => ({ key: 'TD-17', connected: true }), listControllers: async () => [],
+        getDifficulty: (c) => { asked.push(c); return 'hard'; } };
+    const kinds = { drums: { api: () => d.win.feedBackDrums }, five_fret: { api: () => null } };
+    const adopt = createAdopt({ win: d.win, doc: d.doc, loadPrefs: () => normalizePrefs({ parts: { drums: { difficulty: 'easy' } } }), kinds });
+    assert.equal((await adopt(DRUMS_ITEM)).parts.drums.difficulty, 'hard');
+    assert.deepEqual(asked, [{ id: 'highway' }]);
+    d.win.feedBackDrums.getDifficulty = () => 'expert_plus';
+    assert.equal((await adopt(DRUMS_ITEM)).parts.drums.difficulty, 'expert');
+    d.win.feedBackDrums.getDifficulty = () => 'bogus';
+    assert.equal((await adopt(DRUMS_ITEM)).parts.drums.difficulty, 'easy');
+    delete d.win.feedBackDrums.getDifficulty;
+    assert.equal((await adopt(DRUMS_ITEM)).parts.drums.difficulty, 'easy');
+    // A drums controller adopted on the drum view plays at the plugin's difficulty too.
+    d.win.feedBackDrums = { midiInput: () => null, getDifficulty: () => 'medium',
+        listControllers: async () => [{ controllerKey: 'Kit#1', connected: true, kind: 'kit' }] };
+    assert.equal((await adopt(DRUMS_ITEM)).controllers[0].difficulty, 'medium');
+});
+
+test('createAdopt 5-fret: the lane difficulty from getDifficulty or its state, else the saved solo difficulty', async () => {
+    const f = vizWin({ picker: 'five_fret', ffState: { controllerKey: 'Gtr#1', instrument: 'bass', difficulty: 'easy' } });
+    const kinds = { drums: { api: () => null }, five_fret: { api: () => f.win.feedBackFiveFret } };
+    const adopt = createAdopt({ win: f.win, doc: f.doc, loadPrefs: () => normalizePrefs({ solo: { difficulty: 'hard' } }), kinds });
+    assert.equal((await adopt(FF_ITEM)).controllers[0].difficulty, 'easy', 'from its state');
+    f.win.feedBackFiveFret.getDifficulty = () => 'medium';
+    assert.equal((await adopt(FF_ITEM)).controllers[0].difficulty, 'medium', 'getDifficulty first');
+    f.win.feedBackFiveFret.getDifficulty = () => 'expert_plus';
+    assert.equal((await adopt(FF_ITEM)).controllers[0].difficulty, 'expert');
+    delete f.win.feedBackFiveFret.getDifficulty;
+    const bare = vizWin({ picker: 'five_fret', ffState: { controllerKey: 'Gtr#1', instrument: 'bass' } });
+    const bareAdopt = createAdopt({ win: bare.win, doc: bare.doc, loadPrefs: () => normalizePrefs({ solo: { difficulty: 'hard' } }),
+        kinds: { drums: { api: () => null }, five_fret: { api: () => bare.win.feedBackFiveFret } } });
+    assert.equal((await bareAdopt(FF_ITEM)).controllers[0].difficulty, 'hard', 'saved fallback');
+});
