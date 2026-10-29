@@ -38,8 +38,12 @@ The Solo screen is for playing alone: a band of one on the RockHeroSmith stage.
   the Drums or 5-Fret controls.
 - **Options:** the crowd meter on or off, failing, and **Next song** (back to the list, or play
   the next song in it).
-- Every choice is remembered (`prefs.solo`). Results' **Next song** after a solo song comes
-  back here.
+- Every choice is remembered (`prefs.solo`). Leaving a solo song mid-song (Esc, End song,
+  holding Back) and Results' **Next song** come back here. So does a drums Play as.
+- **Plain drums and 5-Fret plays.** A song played the normal way on the drum view or the
+  5-Fret view is scored by RockHeroSmith as a band of one (HUD, results, drop-outs). It
+  still leaves like any song: Esc, End song and Results' **Next song** go back to where you
+  started it.
 
 ## Playing on a controller
 
@@ -110,8 +114,9 @@ The Solo screen is for playing alone: a band of one on the RockHeroSmith stage.
   controllers) and each 5-Fret controller, that plugin's quick settings for its lane
   (difficulty, auto kick and cymbals, pro cymbals, timing, input offset, pad volume; for
   5-Fret part, lefty and offset). A drummer's **Sound** (Rock Band, Song + pads, Kit only)
-  switches at once and is saved for that player. Esc, P or Back to the song closes it;
-  with a pad, its arrows move through it and B closes it.
+  switches at once and is saved for that player. While a section practice loop runs it
+  also has **Stop practice** (clears the loop, speed back to full). Esc, P or Back to the
+  song closes it; with a pad, its arrows move through it and B closes it.
 - **Settings mid-song.** The sidebar's Settings pauses the song and shows Settings over it.
   Esc or "Back to the song" closes it, puts the band guitar difficulty back and resumes only
   what was playing. Any other sidebar item pauses and asks "Leave the song?": Stay resumes,

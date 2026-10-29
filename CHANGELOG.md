@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.0] - Unreleased
+
+Drums & controllers: one play layer for drums and 5-fret, solo or band, plus the Solo screen, the in-song Part sheet and richer results (PRs #3, #4, #5 and #6).
+
+### Added
+- **Play layer** (`docs/play-layer-contract.md`): `rockHeroSmith.playSolo` takes `kind: 'kit'` (the real drummer on the Drums plugin's MIDI input) besides drum and 5-fret controllers; a song with no chart for the kind returns `'setup'`. New `soloKindFor(song)` (what the drums Play-as should use), `openSolo({ next })` and `adoptsSolo()`.
+- **Plain plays adopted:** a plain drums or 5-Fret play on the main highway (no splitscreen, someone able to score) becomes a one-player RockHeroSmith session with the band HUD, results, drop-outs and miss sound, keeping the player's own difficulty (`prefs.adoptSolo`, default on). It leaves like any song: Esc, End song, a held Back and Results **Next song** go back where it was started; Play again stays adopted.
+- **`play:judgment`** and **`play:result`** on the core bus for every scored note and once per results screen (players with difficulty, accuracy, stars, full combo, pro cymbals, failed, per-section accuracy; `practice` for looped or slowed songs). `drums:bonus` (a drum solo bonus) adds points.
+- **Solo screen** (its own screen, `plugin-rockherosmith-solo`): pick Drums (kit), a drum controller, a 5-Fret controller (Lead / Rhythm / Bass) or real guitar, a difficulty and the drum sound; the library filtered to songs with that part, with search and **Browse library**; click, Enter or A plays it. Options for the crowd meter, failing and auto-next, all saved in `prefs.solo`. **Play solo** on the Home hero and on Band setup. Leaving a Solo-screen or Play-as song mid-song (Esc, End song, held Back) and its Results **Next song** come back here.
+- **Crowd meter off** for solo songs (`prefs.solo.crowd`); scoring and failing are unchanged.
+- In-song **Part** sheet: **P** or the stage menu's **Part** item opens each local drums / 5-Fret player's quick settings over the song (the drums and 5-Fret plugins' `mountQuickSettings` on that player's lane), solo or band. It never pauses; Esc, P or Back to the song closes it. While a section practice loop runs it also offers **Stop practice**, which clears the loop and puts the speed back to full.
+- Drum sound mode changes mid-song (Part sheet): saved per player (`parts.drums.soundMode`, the controller's entry, or `solo.soundMode`) and applied live: the drum stem, Rock Band drop-outs and the pad mute are rebuilt without restarting the song.
+- **Pad volume** slider beside the real drummer's and each drums controller's sound mode on the band screen (the drums plugin's `getPadSound` / `setPadSound`; hidden without them).
+- Real drummer in **Rock Band**: the Drums plugin's pads are muted while the drum stem (or, on an unsplit song, the whole mix) drops out on a miss; pads come back at the end of the session.
+- **Results:** per-section accuracy on each card with the two worst sections marked; click a section to practice it (A-B loop, 100/90/80/70% speed, and a drill to 90% three times in a row); your best, last runs and "New best!" per song, part and difficulty from feedBack's run history.
+
+### Changed
+- Drum sound modes read **Rock Band**, **Song + pads** and **Kit only** everywhere (ids unchanged). The real drummer's Rock Band is no longer greyed on an unsplit song: it muffles the whole mix.
+- A loop wrap rewinds the score to the loop start, and a looped or slowed song is practice: never scored, and never ends in Band failed.
+
 ## [0.2.0] - Unreleased
 
 ### Added
@@ -7,13 +27,8 @@
 - **Play as** entry for core's library menus (`libraryCardActions`, placement `play-as`): RockHeroSmith opens the band screen with the song, on band-ready songs (greyed out while a session runs).
 - Rock Band miss sound: a controller player in Rock Band part audio hears a short, quiet synthesized "clunk" on a miss, overstrum or overhit (WebAudio, no samples, at most one per 90 ms). **Miss sound** On | Off on the band screen (`prefs.missSound`, default on); solo Play as keeps the saved value.
 - Rock Band audio drop on unsplit songs (no stems, or only the `full` stem): a Rock Band controller with no stem of its own muffles the whole song on a miss and brings it back on a hit, a seek or the session's end, by the same rules as a stem drop-out (a real part or Always play controller on the mix keeps it). With the Stems plugin it is a low-pass filter after the stems master; on core's `<audio>` and the desktop JUCE engine the Song volume dips to 40% and is re-applied from the Song fader. The band screen no longer greys 5-Fret Part audio or Drums Rock Band on unsplit songs.
-- In-song **Part** sheet: **P** or the stage menu's **Part** item opens each local drums / 5-Fret player's quick settings over the song (the drums and 5-Fret plugins' `mountQuickSettings` on that player's lane), solo or band. It never pauses; Esc, P or Back to the song closes it. While a section practice loop runs it also offers **Stop practice** (the runtime's `stopPractice`, when wired).
-- Drum sound mode changes mid-song (Part sheet): saved per player (`parts.drums.soundMode`, the controller's entry, or `solo.soundMode`) and applied live: the drum stem, Rock Band drop-outs and the pad mute are rebuilt without restarting the song.
-- Leaving a solo or adopted session mid-song (held Back, Esc, End song) goes to the Solo screen (`openSolo`) instead of band setup; band sessions are unchanged. A sidebar link is still followed.
-- **Pad volume** slider beside the real drummer's and each drums controller's sound mode on the band screen (the drums plugin's `getPadSound` / `setPadSound`; hidden without them).
 
 ### Changed
-- Drum sound modes read **Rock Band**, **Song + pads** and **Kit only** everywhere (ids unchanged). The real drummer's Rock Band is no longer greyed on an unsplit song: it muffles the whole mix.
 - Renamed Build-a-Band to RockHeroSmith (id `rockherosmith`, screen `plugin-rockherosmith`); saved band setups move from `build_a_band.prefs.v1` on first load (the old key is kept).
 
 ### Deprecated
