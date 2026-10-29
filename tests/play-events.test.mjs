@@ -95,3 +95,15 @@ test('resultEvent: proDrums for drums players only; failed for a player who fail
     assert.deepEqual([by.ctl1.failed, by.drums.failed], [true, false]);
     assert.equal(resultEvent({ filename: 'a', sessionId: 's', snapshot: score.snapshot(), prefs }).players[0].proDrums, false);
 });
+
+test('resultEvent: sections per player (stream B3), copied; missing is []', () => {
+    const score = createBandScore({ parts: ['drums', 'ctl1'] });
+    score.record({ part: 'drums', t: 1, kind: 'hit', points: 10, multiplier: 1, streak: 1 });
+    score.record({ part: 'ctl1', t: 1, kind: 'hit', points: 10, multiplier: 1, streak: 1 });
+    const verse = { name: 'Verse 1', start: 0, end: 5, hits: 1, misses: 0, accuracy: 1 };
+    const sections = { drums: [verse] };
+    const ev = resultEvent({ filename: 'a', sessionId: 's', snapshot: score.snapshot(), prefs, sections });
+    assert.deepEqual(ev.players[0].sections, [verse]);
+    assert.notEqual(ev.players[0].sections[0], verse, 'a copy: listeners never touch the runtime\'s rows');
+    assert.deepEqual(ev.players[1].sections, []);
+});

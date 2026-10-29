@@ -1,7 +1,7 @@
 // The results model (plan 4 R17): pure, from a band score snapshot.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resultsModel, pickAwards } from '../src/results.js';
+import { resultsModel, pickAwards, historyPart, historyUrl, historyView, createHistoryLoader } from '../src/results.js';
 
 function prefsOn(on = { guitar: true, drums: true, vocals: true }) {
     return {
@@ -265,4 +265,190 @@ test('fallback award Held it down', () => {
     const m = resultsModel({ snapshot: drumCtlSnap(), prefs: { ...prefsOn({}), controllers: DRUM_CTLS }, song: {}, oneLevel: false, drumsExtra: null });
     assert.equal(m.cards[1].award, 'Held it down');
     assert.deepEqual(pickAwards([{ part: 'ctl2', kind: 'drums_controller', score: 10, bestStreak: 0, judged: 0, accuracy: null }]), ['Held it down']);
+});
+
+// ── Stream B3: per-section accuracy and run history ─────────────────────
+
+test('cards carry their sections with a percent, the worst flagged; none is []', () => {
+    const sec = (name, start, hits, misses) => ({ name, start, end: start + 10, hits, misses, accuracy: hits / (hits + misses) });
+    const m = resultsModel({
+        snapshot: SNAPSHOT, prefs: prefsOn(), song: {}, oneLevel: false, drumsExtra: null,
+        sections: { drums: [sec('Intro 1', 0, 10, 0), sec('Verse 1', 10, 6, 4), sec('Chorus 1', 20, 9, 1), sec('Bridge 1', 30, 2, 8)] },
+    });
+    const [g, d] = m.cards;
+    assert.deepEqual(g.sections, []);
+    assert.deepEqual(d.sections, [
+        { name: 'Intro 1', start: 0, end: 10, pct: 100, worst: false },
+        { name: 'Verse 1', start: 10, end: 20, pct: 60, worst: true },
+        { name: 'Chorus 1', start: 20, end: 30, pct: 90, worst: false },
+        { name: 'Bridge 1', start: 30, end: 40, pct: 20, worst: true },
+    ]);
+});
+
+test('historyPart: the recorder\'s part key; real guitar and unknown players have none', () => {
+    assert.equal(historyPart({ instrument: 'drums', part: 'drums' }), 'drums');
+    assert.equal(historyPart({ instrument: 'vocals', part: '' }), 'vocals');
+    assert.equal(historyPart({ instrument: 'five_fret', part: 'Rhythm' }), 'five_fret:rhythm');
+    assert.equal(historyPart({ instrument: 'guitar', part: 'lead' }), null);
+    assert.equal(historyPart({ instrument: null, part: null }), null);
+    assert.equal(historyPart(null), null);
+});
+
+test('historyUrl: filename, part, difficulty, limit', () => {
+    assert.equal(historyUrl('My Song.sloppak', { instrument: 'five_fret', part: 'bass', difficulty: 'hard' }),
+        '/api/stats/history?filename=My%20Song.sloppak&part=five_fret%3Abass&difficulty=hard&limit=5');
+    assert.equal(historyUrl('a', { instrument: 'drums', part: 'drums', difficulty: null }, 3),
+        '/api/stats/history?filename=a&part=drums&difficulty=&limit=3');
+    assert.equal(historyUrl('a', { instrument: 'guitar', part: 'lead' }), null);
+});
+
+const run = (o) => ({ id: 1, score: 1000, accuracy: 0.9, full_combo: false, session_id: 'old', player: 'drums', played_at: 1, ...o });
+const best = (o) => ({ plays: 3, best_score: 5000, best_accuracy: 0.95, ...o });
+
+test('historyView: this run recorded and at the best is New best; recent runs leave it out', () => {
+    const data = { best: best({ best_score: 6000 }), runs: [run({ id: 9, score: 6000, session_id: 's1' }), run({ id: 8, score: 5000, accuracy: 0.955 }), run({ id: 7, score: 4000, full_combo: true })] };
+    const v = historyView({ data, score: 6000, sessionId: 's1', player: 'drums' });
+    assert.deepEqual(v, {
+        newBest: true, firstRun: false, recorded: true,
+        best: { score: 6000, accuracyPct: 95 },
+        recent: [{ score: 5000, accuracyPct: 96, fullCombo: false }, { score: 4000, accuracyPct: 90, fullCombo: true }],
+    });
+});
+
+test('historyView: recorded but under the best; a first run is no New best', () => {
+    const data = { best: best(), runs: [run({ score: 3000, session_id: 's1' })] };
+    assert.equal(historyView({ data, score: 3000, sessionId: 's1', player: 'drums' }).newBest, false);
+    const first = { best: best({ plays: 1, best_score: 3000 }), runs: [run({ score: 3000, session_id: 's1' })] };
+    const v = historyView({ data: first, score: 3000, sessionId: 's1', player: 'drums' });
+    assert.equal(v.newBest, false);
+    assert.equal(v.firstRun, true);
+    assert.deepEqual(v.recent, []);
+});
+
+test('historyView: not recorded yet compares with the stored best', () => {
+    const data = { best: best(), runs: [run({ score: 4000 })] };
+    let v = historyView({ data, score: 5200, sessionId: 's1', player: 'drums' });
+    assert.equal(v.newBest, true);
+    assert.equal(v.recorded, false);
+    assert.equal(v.recent.length, 1);
+    v = historyView({ data, score: 5000, sessionId: 's1', player: 'drums' });
+    assert.equal(v.newBest, false, 'a tie with a best already stored is not new');
+    v = historyView({ data: { best: null, bests: [], runs: [] }, score: 10, sessionId: 's1', player: 'drums' });
+    assert.deepEqual(v, { newBest: false, firstRun: true, recorded: false, best: null, recent: [] });
+});
+
+test('historyView: another player\'s row with this session id is not this run', () => {
+    const data = { best: best(), runs: [run({ score: 9000, session_id: 's1', player: 'ctl1' })] };
+    const v = historyView({ data, score: 100, sessionId: 's1', player: 'drums' });
+    assert.equal(v.recorded, false);
+    assert.equal(v.recent.length, 1);
+});
+
+test('historyView: practice never says New best or First run', () => {
+    const data = { best: best(), runs: [] };
+    const v = historyView({ data, score: 99999, sessionId: 's1', player: 'drums', practice: true });
+    assert.equal(v.newBest, false);
+    assert.equal(historyView({ data: { best: null, runs: [] }, score: 1, sessionId: 's', player: 'drums', practice: true }).firstRun, false);
+});
+
+test('historyView: an older core (no runs list, an error body) gives null', () => {
+    for (const data of [null, undefined, { detail: 'Not Found' }, { best: null, runs: 'x' }, 'html']) {
+        assert.equal(historyView({ data, score: 1, sessionId: 's', player: 'drums' }), null);
+    }
+});
+
+function fakeBus() {
+    const map = new Map();
+    return {
+        on: (ev, fn) => { if (!map.has(ev)) map.set(ev, new Set()); map.get(ev).add(fn); },
+        off: (ev, fn) => { if (map.has(ev)) map.get(ev).delete(fn); },
+        emit: (ev, detail) => { for (const fn of [...(map.get(ev) || [])]) fn({ detail }); },
+        count: (ev) => (map.get(ev) ? map.get(ev).size : 0),
+    };
+}
+const flush = () => new Promise((r) => setTimeout(r, 0));
+const RESULT = {
+    filename: 'a.sloppak', sessionId: 's1', practice: false,
+    players: [
+        { player: 'drums', instrument: 'drums', part: 'drums', difficulty: 'expert', score: 6000 },
+        { player: 'guitar', instrument: 'guitar', part: 'lead', difficulty: 'hard', score: 10 },
+        { player: 'ctl1', instrument: 'five_fret', part: 'bass', difficulty: 'easy', score: 300 },
+    ],
+};
+
+test('createHistoryLoader: fetches each player now, again after stats:recorded for this song, then stops listening', async () => {
+    const fb = fakeBus();
+    const urls = [];
+    let recorded = false;
+    const getJson = (url) => {
+        urls.push(url);
+        const mine = recorded ? [run({ score: 6000, session_id: 's1' })] : [];
+        return Promise.resolve({ best: best({ best_score: recorded ? 6000 : 5000, plays: recorded ? 4 : 3 }), runs: [...mine, run()] });
+    };
+    const views = [];
+    const loader = createHistoryLoader({ getJson, fb, result: RESULT, onView: (id, v) => views.push([id, v]) });
+    await flush();
+    assert.deepEqual(urls, [
+        '/api/stats/history?filename=a.sloppak&part=drums&difficulty=expert&limit=5',
+        '/api/stats/history?filename=a.sloppak&part=five_fret%3Abass&difficulty=easy&limit=5',
+    ]);
+    assert.deepEqual(views.map(([id, v]) => [id, v.recorded, v.newBest]), [['drums', false, true], ['ctl1', false, false]]);
+    fb.emit('stats:recorded', { filename: 'other.sloppak' });
+    await flush();
+    assert.equal(urls.length, 2, 'another song\'s stats are not ours');
+    recorded = true;
+    fb.emit('stats:recorded', { filename: 'a.sloppak' });
+    await flush();
+    assert.equal(urls.length, 4);
+    assert.deepEqual(views.slice(2).map(([id, v]) => [id, v.recorded, v.newBest]), [['drums', true, true], ['ctl1', false, false]]);
+    assert.equal(fb.count('stats:recorded'), 0);
+    loader.dispose();
+});
+
+test('createHistoryLoader: a stale answer never replaces a newer one', async () => {
+    const fb = fakeBus();
+    const pending = [];
+    const getJson = () => new Promise((resolve) => pending.push(resolve));
+    const views = [];
+    const result = { ...RESULT, players: [RESULT.players[0]] };
+    createHistoryLoader({ getJson, fb, result, onView: (id, v) => views.push(v.recorded) });
+    fb.emit('stats:recorded', { filename: 'a.sloppak' });
+    await flush();
+    assert.equal(pending.length, 2);
+    pending[1]({ best: best({ best_score: 6000 }), runs: [run({ score: 6000, session_id: 's1' })] });
+    await flush();
+    pending[0]({ best: best(), runs: [] });
+    await flush();
+    assert.deepEqual(views, [true]);
+});
+
+test('createHistoryLoader: practice fetches once and never waits; failures and dispose are silent', async () => {
+    const fb = fakeBus();
+    let calls = 0;
+    const views = [];
+    createHistoryLoader({ getJson: () => { calls++; return Promise.reject(new Error('404')); }, fb, result: { ...RESULT, practice: true }, onView: (id, v) => views.push(v) });
+    await flush();
+    assert.equal(calls, 2);
+    assert.equal(fb.count('stats:recorded'), 0);
+    assert.deepEqual(views, []);
+    // A getJson that throws, and one answering after dispose.
+    const loader = createHistoryLoader({ getJson: () => { throw new Error('no fetch'); }, fb, result: RESULT, onView: () => views.push(1) });
+    await flush();
+    loader.dispose();
+    assert.equal(fb.count('stats:recorded'), 0);
+    let resolve;
+    let asked = 0;
+    const result = { ...RESULT, players: [RESULT.players[0]] };
+    const getJson = () => { asked++; return new Promise((r) => { resolve = r; }); };
+    createHistoryLoader({ getJson, fb, result, onView: () => views.push(2) }).dispose();
+    await flush();
+    assert.equal(asked, 0, 'disposed before it asked: never asks');
+    const late = createHistoryLoader({ getJson, fb, result, onView: () => views.push(3) });
+    await flush();
+    late.dispose();
+    resolve({ best: best(), runs: [] });
+    await flush();
+    assert.deepEqual(views, []);
+    // No bus, no players: nothing to do.
+    assert.doesNotThrow(() => createHistoryLoader({ getJson: () => Promise.resolve({}), fb: null, result: null, onView: () => {} }).dispose());
 });

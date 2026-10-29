@@ -479,3 +479,18 @@ test('a bonus rewinds with the ledger and is ignored for a failed part', () => {
     f.record({ part: 'drums', t: 30, kind: 'bonus', points: 500 });
     assert.equal(f.snapshot().parts.drums.score, 0);
 });
+
+test('entries(): copies of the ledger, in order, after rewinds', () => {
+    const score = createBandScore({ parts: ['drums'] });
+    score.record({ part: 'drums', t: 1, kind: 'hit', points: 10, multiplier: 1, streak: 1 });
+    score.record({ part: 'drums', t: 2, kind: 'miss', points: 0, multiplier: 1, streak: 0 });
+    score.record({ part: 'nobody', t: 2, kind: 'hit', points: 10 });
+    const list = score.entries();
+    assert.deepEqual(list.map((e) => [e.t, e.kind]), [[1, 'hit'], [2, 'miss']]);
+    list[0].kind = 'miss';
+    list.push({ part: 'drums', t: 9, kind: 'hit' });
+    assert.equal(score.entries()[0].kind, 'hit');
+    assert.equal(score.entries().length, 2);
+    score.rewindTo(1.5);
+    assert.deepEqual(score.entries().map((e) => e.t), [1]);
+});
