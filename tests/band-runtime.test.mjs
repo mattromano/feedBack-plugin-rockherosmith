@@ -5029,12 +5029,12 @@ test('play:result proDrums reads the drums engine state at the results', () => {
     env.rt.dispose();
 });
 
-test('soloActive: while an adopt waits, while a solo or adopted session runs; never for a band or a refused adopt', async () => {
+test('soloActive: only while a solo or adopted session with a scoring player runs; never pending, a band or a refused adopt', async () => {
     const { env } = adoptEnv();
     const { rt, loadSong, fb } = env;
     assert.equal(rt.soloActive(), false);
     loadSong(DRUM_ITEM);
-    assert.equal(rt.soloActive(), true, 'pending');
+    assert.equal(rt.soloActive(), false, 'pending: no scoring player yet');
     await flush();
     assert.equal(rt.soloActive(), true, 'adopted');
     fb.emit('song:stop', {});
@@ -5077,4 +5077,137 @@ test('play:result proDrums falls back to the drums judgment detail when the stat
     c.fb.emit('song:ended', {});
     assert.equal(g3.result[0].players.find((p) => p.player === 'ctl1').proDrums, true);
     c.rt.dispose();
+});
+
+// ---- PR #3 review fixes ----
+
+test('an adopted 5-fret play scores: the part comes from the adopt, not core\'s song', async () => {
+    // Core's currentSong (loadSong) carries no five_fret_parts.
+    const adoptPrefs = { prefs: { ...prefsWith(NO_REAL), controllers: [{ ...PAD1, part: 'bass' }] },
+        song: { filename: FF_ITEM.filename, five_fret_parts: ['bass:chart'] } };
+    const { env } = adoptEnv({ adoptPrefs });
+    const got = playEvents(env.fb);
+    env.loadSong(FF_ITEM);
+    await flush();
+    assert.equal(env.rt.phase(), 'playing');
+    assert.equal(env.rt.soloActive(), true);
+    const canvas = env.mounts[0].ctlCanvas.ctl1;
+    assert.ok(canvas, 'the controller has a lane');
+    env.fb.emit('five_fret:hit', ffEv(canvas, { score: 50 }));
+    assert.equal(env.rt.snapshot().parts.ctl1.hits, 1);
+    assert.equal(got.judgment[0].instrument, 'five_fret');
+    env.rt.dispose();
+});
+
+test('an adopt with no scoring player does not adopt', async () => {
+    // 5-fret prefs on a song with no 5-fret part: nobody can play.
+    const adoptPrefs = { ...prefsWith(NO_REAL), controllers: [{ ...PAD1 }] };
+    const { env } = adoptEnv({ adoptPrefs });
+    env.loadSong(FF_ITEM);
+    await flush();
+    assert.equal(env.rt.phase(), 'idle');
+    assert.equal(env.rt.soloActive(), false);
+    assert.equal(env.mounts.length, 0);
+    // A stage whose only lane fails to start: the session goes again.
+    const lost = adoptEnv({ adoptPrefs: { prefs: adoptPrefs, song: { filename: FF_ITEM.filename, five_fret_parts: ['bass:chart'] } } });
+    lost.env.failLanes.add('ctl1');
+    lost.env.loadSong(FF_ITEM);
+    await flush();
+    assert.equal(lost.env.rt.phase(), 'idle');
+    assert.equal(lost.env.rt.soloActive(), false);
+    env.rt.dispose();
+    lost.env.rt.dispose();
+});
+
+test('a pending adopt is dropped once the song ended', async () => {
+    const { env, asked } = adoptEnv();
+    env.loadSong(DRUM_ITEM);
+    env.fb.emit('song:ended', {});
+    await flush();
+    assert.deepEqual(asked, [DRUM_ITEM.filename]);
+    assert.equal(env.rt.phase(), 'idle');
+    env.rt.dispose();
+});
+
+test('an adopted kit keeps the player\'s own difficulty on #highway (no band pin)', async () => {
+    const { env } = adoptEnv({ adoptPrefs: kitSolo({ difficulty: 'easy' }) });
+    env.loadSong(DRUM_ITEM);
+    await flush();
+    assert.equal(env.rt.phase(), 'playing');
+    assert.deepEqual(env.calls.setDifficulty, []);
+    assert.deepEqual(env.calls.inputTarget.filter(Boolean), [env.highwayCanvas], 'still the input target');
+    env.rt.dispose();
+});
+
+test('Rock Band pads: muted only when a drop-out applies; stems not reported yet is Song + pads until they are', () => {
+    // Split song without a drum stem: the session already plays Song + pads.
+    const split = setup({ stems: ['guitar'] });
+    const p1 = [];
+    split.win.feedBackDrums.setPadSound = (o) => { p1.push(o); return o; };
+    split.rt.startSession({ song: { ...DRUM_ITEM, stem_ids: ['guitar'] }, prefs: kitSolo({ soundMode: 'rockband' }), solo: true });
+    split.loadSong(DRUM_ITEM);
+    assert.deepEqual(p1, []);
+    split.rt.dispose();
+    // Stems not listed yet (a split song): no mute until stems reports a drum stem.
+    const stems = [];
+    const late = setup({ stems });
+    const p2 = [];
+    late.win.feedBackDrums.setPadSound = (o) => { p2.push(o); return o; };
+    late.rt.startSession({ song: STEM_ITEM, prefs: kitSolo({ soundMode: 'rockband' }), solo: true });
+    late.loadSong(STEM_ITEM);
+    assert.deepEqual(p2, []);
+    stems.push('guitar', 'drums');
+    late.fireWin('stems:state', { event: 'provider-ready', stemIds: ['guitar', 'drums'] });
+    assert.deepEqual(p2, [{ muted: true }]);
+    late.rt.dispose();
+    assert.deepEqual(p2, [{ muted: true }, { muted: false }]);
+});
+
+test('pad mute: restored to what it was before, first thing at teardown', () => {
+    const env = setup();
+    const pads = [];
+    let muted = true;
+    env.win.feedBackDrums.getPadSound = () => ({ muted, volume: 1 });
+    env.win.feedBackDrums.setPadSound = (o) => { pads.push(o); muted = !!o.muted; return { muted, volume: 1 }; };
+    env.rt.startSession({ song: STEM_ITEM, prefs: kitSolo({ soundMode: 'rockband' }), solo: true });
+    env.loadSong(STEM_ITEM);
+    env.fb.emit('song:stop', {});
+    assert.deepEqual(pads, [], 'already muted: nothing to do or undo');
+    env.rt.dispose();
+    const b = setup();
+    const order = [];
+    b.win.feedBackDrums.getPadSound = () => ({ muted: false, volume: 1 });
+    b.win.feedBackDrums.setPadSound = (o) => { order.push(['pads', o.muted, b.mounts[0].unmounted]); return o; };
+    b.rt.startSession({ song: STEM_ITEM, prefs: kitSolo({ soundMode: 'rockband' }), solo: true });
+    b.loadSong(STEM_ITEM);
+    b.fb.emit('song:stop', {});
+    assert.deepEqual(order, [['pads', true, 0], ['pads', false, 0]], 'unmuted before the stage goes');
+    b.rt.dispose();
+    // The __drumsMutePads fallback keeps a value that was already set.
+    const c = setup();
+    c.win.__drumsMutePads = true;
+    c.rt.startSession({ song: STEM_ITEM, prefs: kitSolo({ soundMode: 'rockband' }), solo: true });
+    c.loadSong(STEM_ITEM);
+    c.fb.emit('song:stop', {});
+    assert.equal(c.win.__drumsMutePads, true);
+    c.rt.dispose();
+});
+
+test('play:result reports the difficulty at song end: a 5-fret quick setting, the drums plugin pick', async () => {
+    const env = setup();
+    const got = playEvents(env.fb);
+    await goCtl(env, ctlPrefs([PAD1], NO_REAL));
+    const canvas = env.mounts[0].ctlCanvas.ctl1;
+    env.fb.emit('five_fret:quick-setting', { canvas, controllerKey: 'Xbox#1', key: 'difficulty', value: 'hard', lane: true });
+    env.fb.emit('song:ended', {});
+    assert.equal(got.result[0].players[0].difficulty, 'hard');
+    env.rt.dispose();
+    const d = setup();
+    const g2 = playEvents(d.fb);
+    d.win.feedBackDrums.getDifficulty = (c) => (c === d.highwayCanvas ? 'expert_plus' : null);
+    d.rt.startSession({ song: DRUM_ITEM, prefs: kitSolo({ difficulty: 'easy' }), solo: true });
+    d.loadSong(DRUM_ITEM);
+    d.fb.emit('song:ended', {});
+    assert.equal(g2.result[0].players[0].difficulty, 'expert');
+    d.rt.dispose();
 });

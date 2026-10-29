@@ -95,12 +95,15 @@ test('soloPrefs keeps the saved miss sound', () => {
 const DRUMS_ITEM = { filename: 'd.sloppak', arrangements: [{ index: 0, name: 'Lead' }, { index: 1, name: 'Drums' }] };
 const FF_ITEM = { filename: 'f.sloppak', five_fret_parts: ['bass:chart'] };
 
-test('soloPrefs kit: the real drummer only, saved device first, saved sound mode, no controllers', () => {
+test('soloPrefs kit: the real drummer only, the connected input first, saved sound mode, no controllers', () => {
     const saved = normalizePrefs({ parts: { drums: { on: false, deviceKey: 'TD-17', soundMode: 'kit', difficulty: 'hard' } },
         controllers: [{ key: KEY, playsAs: 'drums' }] });
+    // deviceKey: the drums plugin's connected MIDI input; it wins over the saved one.
     const p = soloPrefs(saved, { kind: 'kit', deviceKey: 'Other MIDI' });
     assert.deepEqual([p.parts.guitar.on, p.parts.drums.on, p.parts.vocals.on], [false, true, false]);
-    assert.deepEqual([p.parts.drums.deviceKey, p.parts.drums.soundMode, p.parts.drums.difficulty], ['TD-17', 'kit', 'hard']);
+    assert.deepEqual([p.parts.drums.deviceKey, p.parts.drums.soundMode, p.parts.drums.difficulty], ['Other MIDI', 'kit', 'hard']);
+    // Nothing connected: the saved input.
+    assert.equal(soloPrefs(saved, { kind: 'kit' }).parts.drums.deviceKey, 'TD-17');
     assert.deepEqual(p.controllers, []);
     // No saved device: the drums plugin's MIDI input; a picked difficulty wins.
     const q = soloPrefs({}, { kind: 'kit', deviceKey: 'Other MIDI', difficulty: 'easy' });
@@ -245,7 +248,7 @@ test('adoptTarget: the drum view on a drum part, the 5-fret view, nothing else',
     const wrong = vizWin({ picker: 'drums', drumsMatch: false });
     assert.equal(adoptTarget(wrong.win, wrong.doc), null);
     const f = vizWin({ picker: 'five_fret', ffState: { controllerKey: 'Gtr#1', instrument: 'bass' } });
-    assert.deepEqual(adoptTarget(f.win, f.doc), { kind: 'five_fret', controllerKey: 'Gtr#1', part: 'bass' });
+    assert.deepEqual(adoptTarget(f.win, f.doc), { kind: 'five_fret', controllerKey: 'Gtr#1', part: 'bass', sourceKind: 'chart' });
     const g = vizWin({ picker: 'highway_3d' });
     assert.equal(adoptTarget(g.win, g.doc), null);
 });
@@ -257,26 +260,26 @@ test('createAdopt: off without adoptSolo; kit on the drum view with MIDI; the pl
     const off = createAdopt({ win: d.win, doc: d.doc, loadPrefs: () => normalizePrefs({ adoptSolo: false }), kinds });
     assert.equal(await off(DRUMS_ITEM), null);
     const on = createAdopt({ win: d.win, doc: d.doc, loadPrefs: () => normalizePrefs({}), kinds });
-    const kit = await on(DRUMS_ITEM);
+    const kit = (await on(DRUMS_ITEM)).prefs;
     assert.deepEqual([kit.parts.drums.on, kit.parts.drums.deviceKey, kit.controllers.length], [true, 'TD-17', 0]);
 
     // No MIDI input connected, a drums controller connected: that controller.
     d.win.feedBackDrums = { midiInput: () => null, listControllers: async () => [{ controllerKey: 'Kit#1', connected: true, kind: 'kit' }] };
-    const ctl = await on(DRUMS_ITEM);
+    const ctl = (await on(DRUMS_ITEM)).prefs;
     assert.deepEqual([ctl.parts.drums.on, ctl.controllers[0].key, ctl.controllers[0].playsAs], [false, 'Kit#1', 'drums']);
     // Neither: the kit (keyboard or the plugin's own input).
     d.win.feedBackDrums = { midiInput: () => null, listControllers: async () => [] };
-    assert.equal((await on(DRUMS_ITEM)).parts.drums.on, true);
+    assert.equal((await on(DRUMS_ITEM)).prefs.parts.drums.on, true);
 
     const f = vizWin({ picker: 'five_fret', ffState: { controllerKey: 'Gtr#1', instrument: 'bass' } });
     const ffKinds = { drums: { api: () => null }, five_fret: { api: () => f.win.feedBackFiveFret } };
     const ffAdopt = createAdopt({ win: f.win, doc: f.doc, loadPrefs: () => normalizePrefs({}), kinds: ffKinds });
-    const five = await ffAdopt(FF_ITEM);
+    const five = (await ffAdopt(FF_ITEM)).prefs;
     assert.deepEqual([five.controllers[0].key, five.controllers[0].playsAs, five.controllers[0].part], ['Gtr#1', 'five_fret', 'bass']);
     // No controller playing and none connected: nothing to adopt.
     const lone = vizWin({ picker: 'five_fret' });
     const loneAdopt = createAdopt({ win: lone.win, doc: lone.doc, loadPrefs: () => normalizePrefs({}),
-        kinds: { drums: { api: () => null }, five_fret: { api: () => lone.win.feedBackFiveFret } } });
+        kinds: { drums: { api: () => null }, five_fret: { api: () => lone.win.feedBackFiveFret } }, wait: () => Promise.resolve() });
     assert.equal(await loneAdopt(FF_ITEM), null);
 });
 
@@ -307,32 +310,89 @@ test('createAdopt: the drums plugin difficulty on #highway (Expert+ is Expert), 
         getDifficulty: (c) => { asked.push(c); return 'hard'; } };
     const kinds = { drums: { api: () => d.win.feedBackDrums }, five_fret: { api: () => null } };
     const adopt = createAdopt({ win: d.win, doc: d.doc, loadPrefs: () => normalizePrefs({ parts: { drums: { difficulty: 'easy' } } }), kinds });
-    assert.equal((await adopt(DRUMS_ITEM)).parts.drums.difficulty, 'hard');
+    assert.equal((await adopt(DRUMS_ITEM)).prefs.parts.drums.difficulty, 'hard');
     assert.deepEqual(asked, [{ id: 'highway' }]);
     d.win.feedBackDrums.getDifficulty = () => 'expert_plus';
-    assert.equal((await adopt(DRUMS_ITEM)).parts.drums.difficulty, 'expert');
+    assert.equal((await adopt(DRUMS_ITEM)).prefs.parts.drums.difficulty, 'expert');
     d.win.feedBackDrums.getDifficulty = () => 'bogus';
-    assert.equal((await adopt(DRUMS_ITEM)).parts.drums.difficulty, 'easy');
+    assert.equal((await adopt(DRUMS_ITEM)).prefs.parts.drums.difficulty, 'easy');
     delete d.win.feedBackDrums.getDifficulty;
-    assert.equal((await adopt(DRUMS_ITEM)).parts.drums.difficulty, 'easy');
+    assert.equal((await adopt(DRUMS_ITEM)).prefs.parts.drums.difficulty, 'easy');
     // A drums controller adopted on the drum view plays at the plugin's difficulty too.
     d.win.feedBackDrums = { midiInput: () => null, getDifficulty: () => 'medium',
         listControllers: async () => [{ controllerKey: 'Kit#1', connected: true, kind: 'kit' }] };
-    assert.equal((await adopt(DRUMS_ITEM)).controllers[0].difficulty, 'medium');
+    assert.equal((await adopt(DRUMS_ITEM)).prefs.controllers[0].difficulty, 'medium');
 });
 
 test('createAdopt 5-fret: the lane difficulty from getDifficulty or its state, else the saved solo difficulty', async () => {
     const f = vizWin({ picker: 'five_fret', ffState: { controllerKey: 'Gtr#1', instrument: 'bass', difficulty: 'easy' } });
     const kinds = { drums: { api: () => null }, five_fret: { api: () => f.win.feedBackFiveFret } };
     const adopt = createAdopt({ win: f.win, doc: f.doc, loadPrefs: () => normalizePrefs({ solo: { difficulty: 'hard' } }), kinds });
-    assert.equal((await adopt(FF_ITEM)).controllers[0].difficulty, 'easy', 'from its state');
+    assert.equal((await adopt(FF_ITEM)).prefs.controllers[0].difficulty, 'easy', 'from its state');
     f.win.feedBackFiveFret.getDifficulty = () => 'medium';
-    assert.equal((await adopt(FF_ITEM)).controllers[0].difficulty, 'medium', 'getDifficulty first');
+    assert.equal((await adopt(FF_ITEM)).prefs.controllers[0].difficulty, 'medium', 'getDifficulty first');
     f.win.feedBackFiveFret.getDifficulty = () => 'expert_plus';
-    assert.equal((await adopt(FF_ITEM)).controllers[0].difficulty, 'expert');
+    assert.equal((await adopt(FF_ITEM)).prefs.controllers[0].difficulty, 'expert');
     delete f.win.feedBackFiveFret.getDifficulty;
     const bare = vizWin({ picker: 'five_fret', ffState: { controllerKey: 'Gtr#1', instrument: 'bass' } });
     const bareAdopt = createAdopt({ win: bare.win, doc: bare.doc, loadPrefs: () => normalizePrefs({ solo: { difficulty: 'hard' } }),
         kinds: { drums: { api: () => null }, five_fret: { api: () => bare.win.feedBackFiveFret } } });
-    assert.equal((await bareAdopt(FF_ITEM)).controllers[0].difficulty, 'hard', 'saved fallback');
+    assert.equal((await bareAdopt(FF_ITEM)).prefs.controllers[0].difficulty, 'hard', 'saved fallback');
+});
+
+// ---- PR #3 review fixes ----
+
+test('kit playSolo: the connected MIDI input, never a saved different one; not connected: the saved one, never the dead key', async () => {
+    const saved = normalizePrefs({ parts: { drums: { deviceKey: 'Saved Kit' } } });
+    const mk = (midi) => {
+        const calls = [];
+        const win = { feedBackDrums: { midiInput: () => midi, listControllers: async () => [] } };
+        const play = createSoloPlay({
+            getRuntime: () => ({ phase: () => 'idle', startSession: (a) => { calls.push(a); return Promise.resolve(true); } }),
+            getScreen: () => null, loadPrefs: () => saved, showScreen: () => {}, win,
+            kinds: { drums: { api: () => win.feedBackDrums }, five_fret: { api: () => null } },
+        });
+        return { play, calls };
+    };
+    const on = mk({ key: 'TD-17', connected: true });
+    await on.play(DRUMS_ITEM, { kind: 'kit' });
+    assert.equal(on.calls[0].prefs.parts.drums.deviceKey, 'TD-17');
+    const off = mk({ key: 'TD-17', connected: false });
+    await off.play(DRUMS_ITEM, { kind: 'kit' });
+    assert.equal(off.calls[0].prefs.parts.drums.deviceKey, 'Saved Kit');
+});
+
+test('createAdopt kit: the connected input wins over the saved one', async () => {
+    const d = vizWin({ picker: 'drums' });
+    d.win.feedBackDrums = { midiInput: () => ({ key: 'TD-17', connected: true }), listControllers: async () => [] };
+    const adopt = createAdopt({ win: d.win, doc: d.doc, loadPrefs: () => normalizePrefs({ parts: { drums: { deviceKey: 'Saved Kit' } } }),
+        kinds: { drums: { api: () => d.win.feedBackDrums }, five_fret: { api: () => null } } });
+    assert.equal((await adopt(DRUMS_ITEM)).prefs.parts.drums.deviceKey, 'TD-17');
+});
+
+test('createAdopt 5-fret: the song gets the part the plugin is playing (core songs carry no 5-fret parts)', async () => {
+    const f = vizWin({ picker: 'five_fret', ffState: { controllerKey: 'Gtr#1', instrument: 'bass', sourceKind: 'auto' } });
+    const adopt = createAdopt({ win: f.win, doc: f.doc, loadPrefs: () => normalizePrefs({}),
+        kinds: { drums: { api: () => null }, five_fret: { api: () => f.win.feedBackFiveFret } } });
+    const core = { filename: 'f.sloppak', arrangements: [] };
+    const r = await adopt(core);
+    assert.deepEqual(r.song.five_fret_parts, ['bass:auto']);
+    assert.equal(r.song.filename, 'f.sloppak');
+    assert.equal(r.prefs.controllers[0].part, 'bass');
+});
+
+test('createAdopt 5-fret: waits for the instance to report its part; none: no adopt', async () => {
+    let state = null;
+    const f = vizWin({ picker: 'five_fret' });
+    f.win.feedBackFiveFret.getInstanceState = () => state;
+    let waits = 0;
+    const adopt = createAdopt({ win: f.win, doc: f.doc, loadPrefs: () => normalizePrefs({}),
+        kinds: { drums: { api: () => null }, five_fret: { api: () => f.win.feedBackFiveFret } },
+        wait: () => { waits++; if (waits === 3) state = { controllerKey: 'Gtr#1', instrument: 'guitar' }; return Promise.resolve(); } });
+    const r = await adopt({ filename: 'f' });
+    assert.equal(waits, 3);
+    assert.deepEqual(r.song.five_fret_parts, ['guitar:chart']);
+    state = null;
+    waits = -100;
+    assert.equal(await adopt({ filename: 'f' }), null, 'no part reported in time');
 });

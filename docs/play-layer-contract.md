@@ -33,9 +33,10 @@ rockHeroSmith.adoptsSolo() -> boolean
   // (in-memory prefs): the plugins ask every frame and hide their own HUD only when true
 ```
 
-- `kind: 'kit'` builds prefs with `parts.drums.on = true` (deviceKey = saved
-  `parts.drums.deviceKey`, else `feedBackDrums.midiInput().key`), every other part off,
-  `controllers: []`. Sound mode = saved `parts.drums.soundMode`.
+- `kind: 'kit'` builds prefs with `parts.drums.on = true` (deviceKey = the connected
+  `feedBackDrums.midiInput().key`, else the saved `parts.drums.deviceKey` when midiInput is
+  absent or not connected; a kit solo or adopt never switches away from the connected
+  input), every other part off, `controllers: []`. Sound mode = saved `parts.drums.soundMode`.
 - Controller solos take `soundMode` from the saved controller entry for that key
   when there is one, else `prefs.solo.soundMode`; never hard-coded.
 - A song with no chart for the kind returns `'setup'` (never starts with no lane).
@@ -49,6 +50,10 @@ session and `prefs.adoptSolo === true`, becomes a one-player session.
   the song is already loading).
 - Who: the drum view on a drum part means `kit` (or the controller pinned to it); the
   5-fret view means the 5-fret controller that is playing it.
+  The 5-fret part is the one the plugin's #highway instance reports (core's song has no
+  5-fret parts). Only the main #highway is adopted (never splitscreen panels), and only
+  with a scoring player: nobody able to play means no adopt. The player's own difficulty
+  (the plugin's) is kept, Expert+ as Expert.
 - Leaving or loading another song tears it down like any session; Results
   "Next song" for a solo or adopted session goes to the Solo screen, not the band
   screen.

@@ -75,6 +75,8 @@ export function createStemSound({ members, fullMix = false } = {}) {
     return {
         stems: () => [...stems.keys()],
         muted: (stemId) => { const st = stems.get(stemId); return !!st && isMuted(st); },
+        // Whether player `id`'s misses can drop its stem (or the full mix) out.
+        drops: (id) => { const st = stems.get(stemOf.get(id)); return !!st && st.rockband && !st.kit; },
         judge(id, kind) {
             const st = stems.get(stemOf.get(id));
             if (!st || failed.has(id) || !st.rockband || st.kit) return [];

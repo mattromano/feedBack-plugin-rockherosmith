@@ -22,8 +22,9 @@ const safe = (fn, d = null) => { try { return fn(); } catch (_) { return d; } };
 // The session prefs for one player: every other part off, the saved look (split,
 // zoom, full screen, miss sound) kept, and the Solo screen's fail mode.
 // opts: { kind: 'kit' | 'five_fret' | 'drums', part?, difficulty?, controllerKey?, name?, deviceKey? }
-//   kit: the real drummer (parts.drums) on the saved input, else `deviceKey` (the drums
-//   plugin's MIDI input), with its saved sound mode, and no controllers.
+//   kit: the real drummer (parts.drums) on `deviceKey` (the drums plugin's connected MIDI
+//   input: never switched away from), else the saved input, with its saved sound mode,
+//   and no controllers.
 //   A controller: its saved entry's sound mode, part audio and lefty, else the solo
 //   sound mode; null without a key or with an unknown kind.
 export function soloPrefs(saved, { kind, part, difficulty, controllerKey, name, deviceKey } = {}) {
@@ -38,7 +39,7 @@ export function soloPrefs(saved, { kind, part, difficulty, controllerKey, name, 
                 guitar: off(base.parts.guitar), vocals: off(base.parts.vocals),
                 drums: {
                     ...drums, on: true,
-                    deviceKey: drums.deviceKey || (typeof deviceKey === 'string' ? deviceKey : ''),
+                    deviceKey: (typeof deviceKey === 'string' && deviceKey) || drums.deviceKey,
                     difficulty: DIFFICULTIES.includes(difficulty) ? difficulty : drums.difficulty,
                 },
             },
@@ -91,6 +92,9 @@ function midiInput(drums) {
     const m = safe(() => drums.midiInput());
     return m && typeof m === 'object' ? m : null;
 }
+
+// The connected MIDI input's key, or '' (none connected: the saved input applies).
+const connectedKey = (m) => (m && m.connected && typeof m.key === 'string' ? m.key : '');
 
 // Whether core's gamepad input lists a connected controller (synchronous; the drums
 // plugin's own listing needs its bindings loaded, so it is a Promise).
@@ -148,7 +152,7 @@ export function createSoloPlay({ getRuntime, getScreen, loadPrefs, showScreen, w
         if (kind === 'kit') {
             await midiReady(win && win.feedBackDrums);
             const m = midiInput(win && win.feedBackDrums);
-            prefs = soloPrefs(loadPrefs(), { ...opts, deviceKey: m && typeof m.key === 'string' ? m.key : '' });
+            prefs = soloPrefs(loadPrefs(), { ...opts, deviceKey: connectedKey(m) });
         } else {
             const ctl = await pickSoloController(kind, kinds);
             if (!ctl) return toSetup(item);
@@ -227,23 +231,38 @@ export function adoptTarget(win, doc) {
         const difficulty = pluginDifficulty(api, canvas, st);
         if (difficulty) out.difficulty = difficulty;
         if (st && typeof st.controllerKey === 'string' && st.controllerKey) out.controllerKey = st.controllerKey;
-        if (st && CONTROLLER_KINDS.five_fret.parts.includes(st.instrument)) out.part = st.instrument;
+        if (st && CONTROLLER_KINDS.five_fret.parts.includes(st.instrument)) {
+            out.part = st.instrument;
+            out.sourceKind = typeof st.sourceKind === 'string' && st.sourceKind ? st.sourceKind : 'chart';
+        }
         return out;
     }
     return null;
 }
 
-// createAdopt({ win, doc, loadPrefs, kinds }) -> adopt(song) -> Promise<prefs | null>
-// The one-player prefs a plain play becomes (contract §2), or null (adoptSolo off, a
-// view that isn't adoptable, or nobody to play it). The drum view is the kit when the
-// MIDI input is connected, else a connected drums controller, else the kit (keyboard,
-// or the plugin's own input); the 5-fret view is the controller playing it, else the
-// first connected one.
-export function createAdopt({ win, doc, loadPrefs, kinds = CONTROLLER_KINDS }) {
-    return async function adopt() {
+// How long an adopt waits for the 5-fret instance on #highway to report its part.
+const ADOPT_WAIT_MS = 100;
+const ADOPT_TRIES = 15;
+
+// createAdopt({ win, doc, loadPrefs, kinds, wait? }) -> adopt(song) -> Promise<{ prefs, song } | null>
+// What a plain play becomes (contract §2): the one-player prefs and the song to judge
+// them against, or null (adoptSolo off, a view that isn't adoptable, or nobody to play
+// it). The drum view is the kit when the MIDI input is connected, else a connected drums
+// controller, else the kit (keyboard, or the plugin's own input). The 5-fret view is the
+// part its instance on #highway plays (core's song carries no 5-fret parts, so the song
+// gets that part), by the controller playing it, else the first connected one; with no
+// part reported (waited for up to ADOPT_TRIES x `wait`) there is no adopt.
+export function createAdopt({ win, doc, loadPrefs, kinds = CONTROLLER_KINDS,
+    wait = () => new Promise((r) => setTimeout(r, ADOPT_WAIT_MS)) }) {
+    return async function adopt(song) {
         const saved = loadPrefs();
         if (!saved || saved.adoptSolo !== true) return null;
-        const target = adoptTarget(win, doc);
+        let target = adoptTarget(win, doc);
+        if (!target) return null;
+        for (let i = 0; target && target.kind === 'five_fret' && !target.part && i < ADOPT_TRIES; i++) {
+            await wait();
+            target = adoptTarget(win, doc);
+        }
         if (!target) return null;
         // The player's own pick in the plugin wins over RockHeroSmith's saved difficulty.
         if (target.kind === 'drums') {
@@ -251,14 +270,18 @@ export function createAdopt({ win, doc, loadPrefs, kinds = CONTROLLER_KINDS }) {
             await midiReady(drums);
             const m = midiInput(drums);
             const difficulty = pluginDifficulty(drums, highwayOf(doc), null);
-            const kit = () => soloPrefs(saved, { kind: 'kit', difficulty, deviceKey: m && typeof m.key === 'string' ? m.key : '' });
+            const kit = () => ({ prefs: soloPrefs(saved, { kind: 'kit', difficulty, deviceKey: connectedKey(m) }), song });
             if (m && m.connected) return kit();
             const ctl = await pickSoloController('drums', kinds);
-            return ctl ? soloPrefs(saved, { kind: 'drums', difficulty, ...ctl }) : kit();
+            return ctl ? { prefs: soloPrefs(saved, { kind: 'drums', difficulty, ...ctl }), song } : kit();
         }
+        if (!target.part) return null;
         const ctl = target.controllerKey ? { controllerKey: target.controllerKey } : await pickSoloController('five_fret', kinds);
         if (!ctl) return null;
-        return soloPrefs(saved, { kind: 'five_fret', part: target.part, difficulty: target.difficulty, ...ctl });
+        return {
+            prefs: soloPrefs(saved, { kind: 'five_fret', part: target.part, difficulty: target.difficulty, ...ctl }),
+            song: { ...(song || {}), five_fret_parts: [target.part + ':' + target.sourceKind] },
+        };
     };
 }
 

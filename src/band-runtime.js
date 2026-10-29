@@ -6,7 +6,7 @@
 // Everything is injected, so this is testable under node; screen.js passes
 // the real window/document. Nothing here plays sound.
 import { initialSession, reduceSession } from './session.js';
-import { drumsDifficultyId, masteryFor, masteryFromPct } from './mappings.js';
+import { drumsDifficultyId, masteryFor, masteryFromPct, DIFFICULTIES } from './mappings.js';
 import { drumArrIndex } from './arrangements.js';
 import { applyDevices } from './devices.js';
 import { planStage } from './stage.js';
@@ -17,6 +17,7 @@ import { guitarEntry, drumsEntry, drumsBonusEntry, vocalsEntry, vocalsTotals, on
 import { playerInfo, judgmentEvent, resultEvent, sessionIdFor } from './play-events.js';
 import { chartPhrases } from './guitar-od.js';
 import { createOverdriveSession } from './overdrive-session.js';
+import { quickSettingPatch } from './solo.js';
 import { stemIdFor, muteStem, restoreStem, SOUND_CLAIM_ID, STEM_SOUND_CLAIM_PREFIX } from './stem-claims.js';
 import { createDrumSound, padsMuted } from './drum-sound.js';
 import { createStemSound, FULL_MIX, isUnsplit } from './stem-sound.js';
@@ -163,8 +164,6 @@ export function createBandRuntime({
     // a started session drops a pending adopt (its generation moves on).
     let sessionCount = 0;
     let adoptGen = 0;
-    // The generation of the adopt still waiting for its answer, or null.
-    let adoptPending = null;
     // Per-session runtime data the pure reducer does not hold.
     let session = null;
     let stage = null;
@@ -598,21 +597,43 @@ export function createBandRuntime({
             const pro = st && typeof st.proDrums === 'boolean' ? st.proDrums : s.proDrumsSeen.get(id);
             if (pro === true) proDrums[id] = true;
         }
+        // The drums plugin's difficulty at song end (getDifficulty), Expert+ as Expert.
+        const difficulties = {};
+        const api = win.feedBackDrums;
+        if (api && typeof api.getDifficulty === 'function') {
+            for (const id of s.scoreParts) {
+                const c = isControllerId(id) ? s.prefs.controllers.find((x) => x.id === id) : null;
+                const canvas = id === 'drums' ? bandDrumCanvas(s)
+                    : (c && c.playsAs === 'drums' && stage && typeof stage.getLaneCanvas === 'function' ? safe(() => stage.getLaneCanvas(id)) : null);
+                if (!canvas) continue;
+                const raw = safe(() => api.getDifficulty(canvas));
+                const diff = raw === 'expert_plus' ? 'expert' : raw;
+                if (DIFFICULTIES.includes(diff)) difficulties[id] = diff;
+            }
+        }
         const detail = resultEvent({
             filename: s.item.filename, sessionId: s.sessionId,
-            snapshot: s.score ? s.score.snapshot() : null, prefs: s.prefs, arrangements, proDrums,
+            snapshot: s.score ? s.score.snapshot() : null, prefs: s.prefs, arrangements, proDrums, difficulties,
             practice: false, durationSec: displayTime(s),
         });
         safe(() => fb.emit('play:result', detail));
     }
 
-    // The drums players' sound modes (the real drummer, drums controllers).
+    // The drums players' sound modes (the real drummer, drums controllers), with Rock
+    // Band counted as Song + pads unless its drop-out applies: a drum stem the mode
+    // mutes, or a stem / the full mix the player drops. A split song with no drum stem,
+    // or stems that haven't listed theirs yet, plays the pads.
     function drumModes(s) {
         const modes = [];
-        if (s.scoreParts.includes('drums')) modes.push(s.prefs.parts.drums.soundMode);
+        const drops = (id) => !!(s.stemSound && s.stemSound.drops(id));
+        if (s.scoreParts.includes('drums')) {
+            const mode = s.prefs.parts.drums.soundMode;
+            const applies = !!stemIdFor('drums', s.prefs.parts.drums, songStemIds()) || drops('drums');
+            modes.push(mode === 'rockband' && !applies ? 'song' : mode);
+        }
         for (const id of s.scoreParts) {
             const c = isControllerId(id) ? s.prefs.controllers.find((x) => x.id === id) : null;
-            if (c && c.playsAs === 'drums') modes.push(c.soundMode);
+            if (c && c.playsAs === 'drums') modes.push(c.soundMode === 'rockband' && !drops(id) ? 'song' : c.soundMode);
         }
         return modes;
     }
@@ -628,8 +649,21 @@ export function createBandRuntime({
         return true;
     }
 
+    // Whether the pads are muted already (by the player or calibration): left as they are.
+    function padsAlreadyMuted() {
+        const api = win.feedBackDrums;
+        if (api && typeof api.getPadSound === 'function') {
+            const cur = safe(() => api.getPadSound());
+            return !!(cur && cur.muted === true);
+        }
+        if (api && typeof api.setPadSound === 'function') return false;
+        return win.__drumsMutePads === true;
+    }
+
+    // Idempotent; runs again when stems list theirs (a drop-out may apply now).
+    // Only a mute this session made is undone (releasePadSound).
     function startPadSound(s) {
-        if (s.padsMuted || !s.score || !padsMuted(drumModes(s))) return;
+        if (s.padsMuted || !s.score || !padsMuted(drumModes(s)) || padsAlreadyMuted()) return;
         s.padsMuted = setPads(true);
     }
 
@@ -992,6 +1026,8 @@ export function createBandRuntime({
         const api = win.feedBackDrums;
         if (!api || !s.drumCanvas) return;
         if (typeof api.setInputTarget === 'function') safe(() => api.setInputTarget(s.drumCanvas));
+        // An adopted kit keeps the difficulty the player picked in the drums plugin.
+        if (s.adopted) return;
         if (typeof api.setDifficulty === 'function') safe(() => api.setDifficulty(drumsDifficultyId(s.prefs.parts.drums.difficulty), s.drumCanvas));
     }
 
@@ -1447,6 +1483,8 @@ export function createBandRuntime({
             release = null;
         },
         teardown(s) {
+            // The pads first: nothing later in teardown can leave them muted.
+            releasePadSound(s);
             // Plan 7, first and silently: nothing resumes, every class and
             // attribute is undone, and full screen is left (Play again keeps it).
             closeOverlaySilently(s);
@@ -1519,7 +1557,6 @@ export function createBandRuntime({
             for (const id of [...s.stemClaims]) restoreFailedStem(s, id);
             releaseDrumSound(s);
             releaseStemSound(s);
-            releasePadSound(s);
         },
         releaseExit() {
             const r = release;
@@ -1619,26 +1656,31 @@ export function createBandRuntime({
         const song = fb.currentSong;
         if (!song || typeof song.filename !== 'string' || !song.filename) return;
         const gen = ++adoptGen;
-        adoptPending = gen;
-        const settle = () => { if (adoptPending === gen) adoptPending = null; };
-        Promise.resolve().then(() => adopt(song)).then((prefs) => {
-            settle();
-            if (!prefs || gen !== adoptGen || state.phase !== 'idle' || session) return;
+        Promise.resolve().then(() => adopt(song)).then((answer) => {
+            if (!answer || gen !== adoptGen || state.phase !== 'idle' || session) return;
             const cur = fb.currentSong;
             if (!cur || cur.filename !== song.filename) return;
-            beginAdopted(song, prefs, detail);
-        }, (e) => { settle(); console.warn('[rockherosmith] adopting the song failed', e); });
+            // { prefs, song } (the song with the facts the plugin knows), or bare prefs.
+            const prefs = answer.prefs || answer;
+            const item = answer.prefs && answer.song ? { ...song, ...answer.song, filename: song.filename } : song;
+            beginAdopted(item, prefs, detail);
+        }, (e) => console.warn('[rockherosmith] adopting the song failed', e));
     }
 
+    // An adopt runs only with a scoring player: nobody able to play leaves the
+    // plain play alone, and a stage that loses its last player ends the session.
     function beginAdopted(song, prefs, detail) {
-        const s = newSession(song, effectivePrefs(sessionPrefs(prefs, song, songStemIds()), song, win, kinds), prefs, { adopted: true });
+        const eff = effectivePrefs(sessionPrefs(prefs, song, songStemIds()), song, win, kinds);
+        if (playingIds(eff).length === 0) return;
+        const s = newSession(song, eff, prefs, { adopted: true });
         // The song already shows on the drum view; the band never switches it.
         s.drumView = false;
         s.readyDetail = detail;
-        // An adopted play counts in with core's own count-in (it already ran).
+        // The adopt picked controllers that are connected now: no list to wait for.
+        s.connected = new Set(eff.controllers.filter((c) => c.on === true).map((c) => c.key));
         session = s;
-        lanes.readConnected(s);
         dispatch({ type: 'adopt', filename: song.filename });
+        if (session === s && state.phase === 'playing' && !(s.score && s.scoreParts.length)) dispatch({ type: 'left' });
     }
 
     const handlers = {
@@ -1650,7 +1692,7 @@ export function createBandRuntime({
             const cur = fb.currentSong;
             dispatch({ type: 'ready', filename: cur && cur.filename, hasPhraseData: !!detail.hasPhraseData });
         },
-        'song:ended': () => dispatch({ type: 'ended' }),
+        'song:ended': () => { adoptGen++; dispatch({ type: 'ended' }); },
         'song:stop': () => { adoptGen++; dispatch({ type: 'left' }); },
         'screen:changing': (e) => {
             const d = (e && e.detail) || {};
@@ -1658,11 +1700,17 @@ export function createBandRuntime({
         },
         // A 5-fret lane's quick settings change on this session's lane (A4): the
         // caller saves it (a band controller's entry, or the Solo choices).
+        // The session's own prefs follow it, so play:result reports the difficulty
+        // the lane ended the song on.
         'five_fret:quick-setting': (e) => {
             const s = session;
             const d = e && e.detail;
-            if (!s || !d || typeof onQuickSetting !== 'function' || !lanes.laneOwner(s, d.canvas)) return;
-            safe(() => onQuickSetting(d, { solo: s.solo }));
+            const id = s && d ? lanes.laneOwner(s, d.canvas) : null;
+            if (!id) return;
+            const c = s.prefs.controllers.find((x) => x.id === id);
+            const patch = c ? quickSettingPatch(s.prefs, { ...d, controllerKey: c.key }) : null;
+            if (patch) s.prefs = { ...s.prefs, controllers: patch.controllers };
+            if (typeof onQuickSetting === 'function') safe(() => onQuickSetting(d, { solo: s.solo }));
         },
         // Band mode and splitscreen never run at once. Armed or playing,
         // splitscreen is stopped and the stage comes back; while ending, the
@@ -1837,6 +1885,7 @@ export function createBandRuntime({
         } else if (s.stemSound) {
             syncStemSound(s, s.stemSound.stems(), { force: true });
         }
+        startPadSound(s);
     }
     const winHandlers = {
         'notedetect:hit': onGuitarJudgment, 'notedetect:miss': onGuitarJudgment, 'notedetect:onset': onOnset,
@@ -1864,10 +1913,9 @@ export function createBandRuntime({
         isMounted: () => !!stage,
         // Whether this runtime can adopt plain plays (an adopt hook, not disposed).
         canAdopt: () => typeof adopt === 'function',
-        // Whether this play is (or is about to be) a one-player session: an adopt
-        // waiting for its answer, or a solo / adopted session running. The plugins
-        // hide their own HUD only then (rockHeroSmith.adoptsSolo).
-        soloActive: () => (adoptPending !== null && adoptPending === adoptGen) || (!!session && session.solo && state.phase !== 'idle'),
+        // Whether a one-player session (solo or adopted) with a scoring player runs.
+        // The plugins hide their own HUD only then (rockHeroSmith.adoptsSolo).
+        soloActive: () => !!session && session.solo && state.phase !== 'idle' && !!session.score && session.scoreParts.length > 0,
         startSession,
         phase: () => state.phase,
         snapshot: () => (session && session.score ? session.score.snapshot() : null),
