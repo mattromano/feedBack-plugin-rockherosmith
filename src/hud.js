@@ -24,7 +24,8 @@ function restart(el, cls) {
 
 const pct = (v) => Math.round(v * 100) + '%';
 
-export function createBandHud({ doc, player, stage, parts, prefs, song, oneLevel }) {
+// crowd: false leaves the crowd meters out (a solo with the Solo screen's crowd meter off).
+export function createBandHud({ doc, player, stage, parts, prefs, song, oneLevel, crowd: showCrowd = true }) {
     const el = (tag, cls, parent) => {
         const e = doc.createElement(tag);
         if (cls) e.className = cls;
@@ -88,11 +89,14 @@ export function createBandHud({ doc, player, stage, parts, prefs, song, oneLevel
         odFill.style.width = '0%';
         const mult = el('span', 'rhs-mult', lane);
         mult.textContent = '×1';
-        const crowd = el('div', 'rhs-crowd', root);
-        const marker = el('i', '', crowd);
-        // R6's starting crowd, so the marker doesn't sit at the floor and slide on the first update.
-        marker.style.bottom = pct(CROWD.start);
-        marker.classList.add('rhs-crowd-' + crowdZone(CROWD.start));
+        let marker = null;
+        if (showCrowd) {
+            const crowd = el('div', 'rhs-crowd', root);
+            marker = el('i', '', crowd);
+            // R6's starting crowd, so the marker doesn't sit at the floor and slide on the first update.
+            marker.style.bottom = pct(CROWD.start);
+            marker.classList.add('rhs-crowd-' + crowdZone(CROWD.start));
+        }
         // Guitar only: the glowing band across the lower third while the Noodle it up zone is open.
         if (part === 'guitar') el('div', 'rhs-noodle-zone', root).setAttribute('aria-hidden', 'true');
         const callout = el('div', 'rhs-callout', root);
@@ -126,10 +130,12 @@ export function createBandHud({ doc, player, stage, parts, prefs, song, oneLevel
             const p = sp[part];
             if (!p) continue;
             text(h.mult, '×' + (Number.isFinite(p.multiplier) ? p.multiplier : 1));
-            const c = Number.isFinite(p.crowd) ? Math.min(1, Math.max(0, p.crowd)) : 0;
-            put(h.marker, 'bottom', pct(c), (v) => { h.marker.style.bottom = v; });
-            const zone = crowdZone(c);
-            for (const z of ZONES) flag(h.marker, 'rhs-crowd-' + z, z === zone);
+            if (h.marker) {
+                const c = Number.isFinite(p.crowd) ? Math.min(1, Math.max(0, p.crowd)) : 0;
+                put(h.marker, 'bottom', pct(c), (v) => { h.marker.style.bottom = v; });
+                const zone = crowdZone(c);
+                for (const z of ZONES) flag(h.marker, 'rhs-crowd-' + z, z === zone);
+            }
             const streak = Number.isFinite(p.streak) ? p.streak : 0;
             put(h.glow, 'level', glowLevel(streak), (v) => { h.glow.style.setProperty('--rhs-glow', String(v)); });
             const before = prev && prev[part];

@@ -1,7 +1,7 @@
 // Solo play: "a band of one" (play layer contract §1, §2). One player on the
 // RockHeroSmith stage, so a song played alone gets everything a band gets (stems
 // dropping out on misses, the HUD, overdrive, results):
-//   - the library's "Play as" entries and the Solo screen call playSolo,
+//   - the library's "Play as" entries and the Solo screen (solo-screen.js) call playSolo,
 //   - a plain drums / 5-fret play is adopted (createAdopt, run by the runtime).
 // The solo band is built for that one session from the saved prefs and never
 // saved: the viewer's band setup stays as it is.
@@ -166,16 +166,10 @@ export function createSoloPlay({ getRuntime, getScreen, loadPrefs, showScreen, w
     };
 }
 
-// The Solo screen (contract §1). A stub until stream B2's Solo screen replaces it:
-// the band screen, with its library pick on { next: true } (Results' Next song).
-export function createOpenSolo({ getScreen, showScreen }) {
-    return function openSolo(opts = {}) {
-        showScreen(BAND_SCREEN);
-        if (opts && opts.next) {
-            const screen = getScreen();
-            if (screen && typeof screen.nextSong === 'function') screen.nextSong();
-        }
-    };
+// Whether the HUD shows the crowd meter (plan phase 8): always in a band; in a solo or
+// adopted session unless the Solo screen turned it off (prefs.solo.crowd).
+export function soloShowsCrowd(prefs, solo) {
+    return !(solo && prefs && prefs.solo && prefs.solo.crowd === false);
 }
 
 // The main highway's view id: the picker (core's source of truth), else the saved

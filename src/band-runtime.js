@@ -17,7 +17,7 @@ import { guitarEntry, drumsEntry, drumsBonusEntry, vocalsEntry, vocalsTotals, on
 import { playerInfo, judgmentEvent, resultEvent, sessionIdFor } from './play-events.js';
 import { chartPhrases } from './guitar-od.js';
 import { createOverdriveSession } from './overdrive-session.js';
-import { quickSettingPatch } from './solo.js';
+import { quickSettingPatch, soloShowsCrowd } from './solo.js';
 import { stemIdFor, muteStem, restoreStem, SOUND_CLAIM_ID, STEM_SOUND_CLAIM_PREFIX } from './stem-claims.js';
 import { createDrumSound, padsMuted } from './drum-sound.js';
 import { createStemSound, FULL_MIX, isUnsplit } from './stem-sound.js';
@@ -448,6 +448,8 @@ export function createBandRuntime({
             doc, player, stage, parts: s.scoreParts, prefs: s.prefs,
             song: { title: cur.title || s.item.title, artist: cur.artist || s.item.artist },
             oneLevel: !(s.readyDetail && s.readyDetail.hasPhraseData),
+            // Solo screen's crowd meter switch (B2, plan phase 8).
+            crowd: soloShowsCrowd(s.prefs, s.solo),
         })) || null;
         if (s.hud) safe(() => s.hud.update(s.score.snapshot()));
         // A remount keeps the dropped-out lanes grey.
