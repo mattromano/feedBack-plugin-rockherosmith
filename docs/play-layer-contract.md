@@ -54,9 +54,11 @@ session and `prefs.adoptSolo === true`, becomes a one-player session.
   5-fret parts). Only the main #highway is adopted (never splitscreen panels), and only
   with a scoring player: nobody able to play means no adopt. The player's own difficulty
   (the plugin's) is kept, Expert+ as Expert.
-- Leaving or loading another song tears it down like any session; Results
-  "Next song" for a solo or adopted session goes to the Solo screen, not the band
-  screen.
+- Leaving or loading another song tears it down like any session. An adopted play
+  leaves like a normal play: Esc, End song, held Back and Results "Next song" take
+  core's exit, back where the song came from (Play again keeps it adopted). Only a
+  `playSolo` session (Solo screen or Play as) leaves to the Solo screen, and its
+  Results "Next song" goes there too, never to the band screen.
 
 ## 3. Events out (core bus, `feedBack.emit`)
 

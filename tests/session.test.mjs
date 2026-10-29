@@ -6,7 +6,7 @@ const st = (phase, filename = 'a.psarc') => ({ phase, filename });
 const step = (state, event) => reduceSession(state, event);
 
 test('initial state', () => {
-    assert.deepEqual(initialSession(), { phase: 'idle', filename: null, solo: false });
+    assert.deepEqual(initialSession(), { phase: 'idle', filename: null, solo: false, adopted: false });
 });
 
 const rows = [
@@ -105,7 +105,7 @@ const ADOPT_EFFECTS = ['saveRestorePoint', 'mount', 'applyDifficulties', 'applyD
 
 test('idle adopt: straight to playing (the song is already loading), solo', () => {
     const r = step(initialSession(), { type: 'adopt', filename: 'a.psarc' });
-    assert.deepEqual(r.state, { phase: 'playing', filename: 'a.psarc', solo: true });
+    assert.deepEqual(r.state, { phase: 'playing', filename: 'a.psarc', solo: true, adopted: true });
     assert.deepEqual(r.effects, ADOPT_EFFECTS);
     assert.ok(!r.effects.includes('play'));
 });
@@ -130,9 +130,27 @@ test('go carries solo; a band go is not solo', () => {
 test('Next song: solo sessions go to the Solo screen, band sessions to the band screen', () => {
     const solo = step({ phase: 'ending', filename: 'a', solo: true }, { type: 'next' });
     assert.deepEqual(solo.effects, ['hideResults', 'teardown', 'releaseExit', 'showSoloScreen']);
-    assert.deepEqual(solo.state, { phase: 'idle', filename: null, solo: false });
+    assert.deepEqual(solo.state, { phase: 'idle', filename: null, solo: false, adopted: false });
     const band = step({ phase: 'ending', filename: 'a', solo: false }, { type: 'next' });
     assert.deepEqual(band.effects, ['hideResults', 'teardown', 'releaseExit', 'showBandScreen']);
+});
+
+// Integration: an adopted plain play leaves like a normal play. Its Next song goes
+// back where the song came from (core's exit), never to the Solo or band screen.
+test('Next song after an adopted play: core\'s exit to where the song came from', () => {
+    const r = step({ phase: 'ending', filename: 'a', solo: true, adopted: true }, { type: 'next' });
+    assert.deepEqual(r.effects, ['hideResults', 'teardown', 'releaseExit', 'exitToOrigin']);
+    assert.deepEqual(r.state, { phase: 'idle', filename: null, solo: false, adopted: false });
+});
+
+test('adopted carries through the session; a Play again of an adopted play goes with adopted', () => {
+    let s = step(initialSession(), { type: 'adopt', filename: 'a' }).state;
+    s = step(s, { type: 'ended' }).state;
+    assert.equal(s.adopted, true);
+    assert.equal(step(initialSession(), { type: 'go', filename: 'a', solo: true }).state.adopted, false);
+    const replay = step(initialSession(), { type: 'go', filename: 'a', solo: true, adopted: true }).state;
+    assert.equal(replay.adopted, true);
+    assert.equal(step(step(replay, { type: 'ready', filename: 'a' }).state, { type: 'ended' }).state.adopted, true);
 });
 
 test('an adopted session ends like any other: seek-free leave, another song, the results', () => {

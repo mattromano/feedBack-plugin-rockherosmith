@@ -18,6 +18,7 @@ import { playerInfo, judgmentEvent, resultEvent, sessionIdFor } from './play-eve
 import { chartPhrases } from './guitar-od.js';
 import { createOverdriveSession } from './overdrive-session.js';
 import { quickSettingPatch, soloShowsCrowd } from './solo.js';
+import { SOLO_SCREEN_ID } from './solo-screen-model.js';
 import { stemIdFor, muteStem, restoreStem, SOUND_CLAIM_ID, STEM_SOUND_CLAIM_PREFIX } from './stem-claims.js';
 import { createDrumSound, padsMuted, DRUM_SOUND_MODES } from './drum-sound.js';
 import { createStemSound, FULL_MIX, isUnsplit } from './stem-sound.js';
@@ -140,7 +141,8 @@ function withoutVocals(prefs) {
 //   shared with the band screen so a Go doesn't re-apply a device just picked.
 //   adopt: optional (play layer contract §2); adopt(song) -> prefs | null | Promise of
 //   either: the one-player prefs a plain play (song:ready outside a session) becomes.
-//   onShowSoloScreen({ next }): optional; Next song after a solo session (else the band screen).
+//   onShowSoloScreen({ next }): optional; Next song after a playSolo session, or leaving one
+//   mid-song (else the band screen). Adopted plain plays use core's exit instead.
 //   onQuickSetting(detail, { solo }): optional; a 5-fret lane's quick settings change
 //   (five_fret:quick-setting) on this session's lane, for the caller to save.
 //   now: the clock for session ids (default Date.now).
@@ -172,6 +174,9 @@ export function createBandRuntime({
     let adoptGen = 0;
     // The screen a solo session was left to mid-song: the Solo screen opens once it shows.
     let soloReturn = null;
+    // The screen core's player was last opened from (screen:changing to 'player'),
+    // where an adopted plain play returns on a Play again.
+    let playerFrom = null;
     // Per-session runtime data the pure reducer does not hold.
     let session = null;
     let stage = null;
@@ -1249,10 +1254,36 @@ export function createBandRuntime({
         else confirmLeave(s, () => { s.leaveTarget = 'nav'; if (s.sidebar) s.sidebar.follow(link); });
     }
 
-    // Leave (held Back): a solo or adopted session goes to the Solo screen through
-    // its hook, which leaves the player; a band session goes to band setup.
+    // A session whose way out is the Solo screen: started by playSolo (the Solo
+    // screen or Play as), not a plain play RockHeroSmith adopted.
+    function soloScreenSession(s) {
+        return !!s && s.solo && !s.adopted;
+    }
+
+    // Where core's exit sends a session's song: band setup; the Solo screen (when
+    // built) for a playSolo session; where an adopted play came from (null: core decides).
+    function returnScreenFor(s) {
+        if (s.adopted) return s.origin || null;
+        if (soloScreenSession(s) && doc.getElementById(SOLO_SCREEN_ID)) return SOLO_SCREEN_ID;
+        return BAND_SCREEN;
+    }
+
+    // Core's own origin rule (session.js _resolvePlayerOrigin): the dashboard returns to Songs.
+    function originScreen(id) {
+        if ((id === 'home' || id === 'v3-home') && doc.getElementById('v3-songs')) return 'v3-songs';
+        return id;
+    }
+
+    // Leave (held Back): an adopted plain play leaves like a normal play (core's
+    // exit, back where the song came from); a playSolo session goes to the Solo
+    // screen through its hook, which leaves the player; a band session goes to band setup.
     function leaveSong(s) {
-        if (s.solo && typeof onShowSoloScreen === 'function') {
+        if (s.adopted && typeof win.closeCurrentSong === 'function') {
+            s.leaveTarget = 'origin';
+            safe(() => win.closeCurrentSong());
+            return;
+        }
+        if (soloScreenSession(s) && typeof onShowSoloScreen === 'function') {
             s.leaveTarget = 'solo';
             safe(() => onShowSoloScreen({ next: false }));
             return;
@@ -1509,8 +1540,13 @@ export function createBandRuntime({
             else if (s.drumsOnly && s.drumIndex >= 0) arrIndex = s.drumIndex;
             // Play again on an adopted play: the arrangement it was playing.
             if (arrIndex === undefined && Number.isInteger(s.replayArrangement)) arrIndex = s.replayArrangement;
-            safe(() => fb.setReturnScreen(BAND_SCREEN));
-            s.setReturn = true;
+            // Where core's exit (Esc, End song, the song's end) goes: band setup; the
+            // Solo screen for a playSolo session; where an adopted play came from.
+            s.returnScreen = returnScreenFor(s);
+            if (s.returnScreen) {
+                safe(() => fb.setReturnScreen(s.returnScreen));
+                s.setReturn = true;
+            }
             // Splitscreen's playSong wrapper auto-starts from this pref; a band
             // session runs without it (teardown puts the saved value back).
             safe(() => storage.setItem(SPLIT_KEY, 'false'));
@@ -1795,10 +1831,18 @@ export function createBandRuntime({
             releaseDrumSound(s);
             releaseStemSound(s);
         },
-        releaseExit() {
+        releaseExit(s) {
             const r = release;
             release = null;
+            if (s) s.exitReleased = typeof r === 'function';
             if (typeof r === 'function') safe(r);
+        },
+        // Next song after an adopted plain play: core's exit, back where the song came
+        // from. Released by releaseExit; with no held exit (Band failed, an older
+        // core), core's closeCurrentSong.
+        exitToOrigin(s) {
+            if (s && s.exitReleased) return;
+            if (typeof win.closeCurrentSong === 'function') safe(() => win.closeCurrentSong());
         },
         showBandScreen(s) {
             const el = doc.getElementById(BAND_SCREEN);
@@ -1822,7 +1866,7 @@ export function createBandRuntime({
         // the normal Go path. Always the last effect: the session is idle by now.
         replay(s) {
             const started = begin(s.item, s.goPrefs, s.keepHides ? s.hidden : null,
-                { solo: s.solo, replayArrangement: s.adopted ? s.loadedArrangement : null });
+                { solo: s.solo, adopted: s.adopted, origin: s.origin, replayArrangement: s.adopted ? s.loadedArrangement : null });
             // Refused: nothing took the hides over, so they're undone here,
             // and nothing keeps the full screen the session before asked for.
             if (!started && s.keepHides) undoHides(s);
@@ -1861,15 +1905,17 @@ export function createBandRuntime({
 
     // hidden: the hides a replayed session inherits (undone at its teardown).
     // replayArrangement: Play again on an adopted play loads the arrangement it played.
-    function begin(song, prefs, hidden, { solo = false, replayArrangement = null } = {}) {
+    // adopted / origin: Play again on an adopted play stays adopted, returning where it came from.
+    function begin(song, prefs, hidden, { solo = false, adopted = false, origin = null, replayArrangement = null } = {}) {
         if (state.phase !== 'idle' || !song || !song.filename) return false;
         adoptGen++;
-        const s = newSession(song, effectivePrefs(sessionPrefs(prefs, song), song, win, kinds), prefs, { solo });
+        const s = newSession(song, effectivePrefs(sessionPrefs(prefs, song), song, win, kinds), prefs, { solo, adopted });
         s.replayArrangement = replayArrangement;
+        if (adopted) s.origin = origin;
         if (hidden) s.hidden = hidden;
         session = s;
         lanes.readConnected(s);
-        dispatch({ type: 'go', filename: song.filename, solo });
+        dispatch({ type: 'go', filename: song.filename, solo: s.solo, adopted: s.adopted });
         if (state.phase === 'idle') return false;
         // Inside the Go (or Play again) click, so the request has user activation.
         if (s.full) safe(() => fullScreen.request());
@@ -1879,7 +1925,7 @@ export function createBandRuntime({
             if (session === s && state.phase === 'armed') {
                 dispatch({ type: 'left' });
                 // Our one-shot return override must not steer the next song.
-                if (s.setReturn && fb._nextReturnScreen === BAND_SCREEN) fb._nextReturnScreen = null;
+                if (s.setReturn && fb._nextReturnScreen === s.returnScreen) fb._nextReturnScreen = null;
             }
             throw e;
         });
@@ -1910,6 +1956,7 @@ export function createBandRuntime({
         const eff = effectivePrefs(sessionPrefs(prefs, song, songStemIds()), song, win, kinds);
         if (playingIds(eff).length === 0) return;
         const s = newSession(song, eff, prefs, { adopted: true });
+        s.origin = playerFrom;
         // The song already shows on the drum view; the band never switches it.
         s.drumView = false;
         s.readyDetail = detail;
@@ -1933,12 +1980,15 @@ export function createBandRuntime({
         'song:stop': () => { adoptGen++; dispatch({ type: 'left' }); },
         'screen:changing': (e) => {
             const d = (e && e.detail) || {};
+            if (d.id === 'player' && d.from && d.from !== 'player') playerFrom = originScreen(d.from);
             if (d.from === 'player' && d.id !== 'player') {
-                // A solo or adopted session left mid-song (core's Esc or End song, to its
+                // A playSolo session left mid-song (core's Esc or End song, to its
                 // return screen): the Solo screen once that screen shows. Not when the
-                // leave already went there or the user picked a sidebar link.
+                // leave already went there, core returns to the Solo screen itself, or
+                // the user picked a sidebar link. An adopted play leaves like a normal play.
                 const s = session;
-                soloReturn = s && s.solo && !s.leaveTarget && typeof onShowSoloScreen === 'function'
+                soloReturn = s && soloScreenSession(s) && !s.leaveTarget && typeof onShowSoloScreen === 'function'
+                    && d.id !== SOLO_SCREEN_ID
                     && (state.phase === 'playing' || state.phase === 'armed') ? d.id : null;
                 adoptGen++;
                 dispatch({ type: 'left' });
@@ -2184,6 +2234,10 @@ export function createBandRuntime({
         drumSound: () => (session && session.drumSound ? { mode: session.drumSound.mode, muted: session.soundClaim } : null),
         again: () => dispatch({ type: 'again' }),
         next: () => dispatch({ type: 'next' }),
+        // B3's section practice (the Part sheet's Stop practice): whether a loop or
+        // drill runs, and stopping it (clears core's loop, speed back to full).
+        practiceActive: () => !!(session && session.practice && session.practice.mode !== 'off'),
+        stopPractice: () => { if (session) practiceDispatch(session, { type: 'stop' }); },
         openPartSheet: () => { const s = scoring(); return !!s && openPart(s); },
         setSoundMode: (id, mode) => { const s = scoring(); return !!s && setSoundMode(s, id, mode); },
         // The stage's overlays for the current session (R22), or null.

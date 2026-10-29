@@ -37,7 +37,7 @@ function init() {
     const runtime = createBandRuntime({ win: window, doc: document, mountStage, loadPrefs, deviceMemo,
         // A plain drums / 5-fret play on the main highway becomes a one-player session (contract §2).
         adopt: createAdopt({ win: window, doc: document, loadPrefs }),
-        // Next song after a solo or adopted session.
+        // Next song after a playSolo session, and leaving one mid-song (adopted plays use core's exit).
         onShowSoloScreen: ({ next }) => openSolo({ next }),
         // A 5-fret lane's quick settings change: saved into that controller's entry
         // (band) or the Solo choices (solo), so it sticks for the next song.

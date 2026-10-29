@@ -10,6 +10,8 @@ import { makeFakeContext } from './fake-audio.mjs';
 import { starsFromScore } from '../src/yarg-rules.js';
 import { CONTROLLER_KINDS } from '../src/controller-model.js';
 import { loadPrefs as loadSavedPrefs, savePrefs as savePrefsTo } from '../src/prefs.js';
+import { createSoloPlay } from '../src/solo.js';
+import { createSoloScreen, createOpenSolo, SOLO_SCREEN_HTML, SOLO_SCREEN_ID } from '../src/solo-screen.js';
 
 function memStorage(init = {}) {
     const m = new Map(Object.entries(init));
@@ -4930,29 +4932,6 @@ test('a plain play outside a session is adopted: playing at once, no playSong, s
     rt.dispose();
 });
 
-test('adopted results: Next song goes to the Solo screen; Play again replays as a solo session', async () => {
-    const { env, shown } = adoptEnv();
-    const { rt, calls, loadSong, fb } = env;
-    loadSong(DRUM_ITEM);
-    await flush();
-    fb.emit('song:ended', {});
-    rt.next();
-    assert.deepEqual(shown, [{ next: true }]);
-    assert.equal(calls.release, 1);
-    assert.equal(calls.showScreen.includes('plugin-rockherosmith'), false);
-    // Play again on an adopted play goes through playSong (the drum arrangement).
-    loadSong(DRUM_ITEM);
-    await flush();
-    fb.emit('song:ended', {});
-    rt.again();
-    assert.deepEqual(calls.playSong, [['Beat.sloppak', 1]]);
-    loadSong(DRUM_ITEM);
-    fb.emit('song:ended', {});
-    rt.next();
-    assert.equal(shown.length, 2, 'the replay is still solo');
-    rt.dispose();
-});
-
 test('playSolo sessions go to the Solo screen; band sessions to the band screen', () => {
     const { env, shown } = adoptEnv();
     const { rt, loadSong, fb } = env;
@@ -5585,7 +5564,7 @@ test('the results close the sheet without a resume', () => {
     env.rt.dispose();
 });
 
-// ---- Leaving a solo or adopted session mid-song goes to the Solo screen ----
+// ---- Leaving a playSolo session mid-song goes to the Solo screen ----
 
 // Core's showScreen: screen:changing, then screen:changed (as session.js / shell do).
 const coreShow = (fb, id, from = 'player') => {
@@ -5604,17 +5583,6 @@ test('leaving a playSolo session mid-song (Esc, End song) opens the Solo screen,
     // Only once: a later visit to the band screen is the user's.
     coreShow(fb, 'plugin-rockherosmith', 'v3-home');
     assert.equal(shown.length, 1);
-    rt.dispose();
-});
-
-test('an adopted play left mid-song goes to the Solo screen wherever core returns', async () => {
-    const { env, shown } = adoptEnv();
-    const { rt, loadSong, fb } = env;
-    loadSong(DRUM_ITEM);
-    await flush();
-    assert.equal(rt.phase(), 'playing');
-    coreShow(fb, 'v3-songs');
-    assert.deepEqual(shown, [{ next: false }]);
     rt.dispose();
 });
 
@@ -5691,4 +5659,211 @@ test("the sheet's Stop practice calls the runtime's stopPractice when one is wir
     assert.equal(g.player.querySelector('.rhs-part-sheet-stop-practice'), null);
     assert.equal(g.calls.pause, 0);
     g.rt.dispose();
+});
+
+// ---- Integration (feature/drums-controllers): the seams between A2, B1, B2 and B3 ----
+
+// Core's playSong: the player screen comes up from `from` (screen:changing), then the song loads.
+const corePlay = (env, item, from = 'v3-songs') => {
+    env.fb.emit('screen:changing', { id: 'player', from });
+    env.fb.emit('screen:changed', { id: 'player', from });
+    env.loadSong(item);
+};
+
+test('the runtime api runs B3\'s practice: practiceActive, stopPractice, and the Part sheet\'s Stop practice', async () => {
+    const env = practiceEnv();
+    const { rt, fb, loadSong, player, calls } = env;
+    assert.equal(typeof rt.stopPractice, 'function');
+    assert.equal(typeof rt.practiceActive, 'function');
+    assert.equal(rt.practiceActive(), false, 'no session');
+    rt.stopPractice();
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    fb.currentSong.duration = 30;
+    assert.equal(rt.practiceActive(), false, 'a plain play loops nothing');
+    drumAt(env, 11);
+    fb.emit('song:ended', {});
+    player.querySelectorAll('button.rhs-speed')[1].click();
+    player.querySelectorAll('button.rhs-section').find((b) => b.textContent.startsWith('Verse')).click();
+    loadSong(DRUM_ITEM);
+    await flush();
+    assert.deepEqual(calls.setLoopAB, [[10, 20]]);
+    assert.equal(rt.practiceActive(), true);
+    assert.equal(rt.openPartSheet(), true);
+    const btn = player.querySelector('.rhs-part-sheet-stop-practice');
+    assert.ok(btn, 'the sheet offers Stop practice');
+    btn.click();
+    assert.equal(calls.clearLoopB3, 1, 'the loop is cleared');
+    assert.deepEqual(calls.speed, [0.9, 1], 'and the speed is back to full');
+    assert.equal(rt.practiceActive(), false);
+    assert.equal(player.querySelector('.rhs-part-sheet-stop-practice'), null);
+    rt.stopPractice();
+    assert.equal(calls.clearLoopB3, 1, 'a second stop does nothing');
+    rt.dispose();
+});
+
+test('an adopted play left mid-song leaves like a normal play: core\'s exit, no Solo screen', async () => {
+    const { env, shown } = adoptEnv();
+    corePlay(env, DRUM_ITEM);
+    await flush();
+    assert.equal(env.rt.phase(), 'playing');
+    coreShow(env.fb, 'v3-songs');
+    assert.equal(env.rt.phase(), 'idle');
+    assert.deepEqual(shown, []);
+    assert.deepEqual(env.calls.showScreen, []);
+    env.rt.dispose();
+});
+
+test('adopted results: Next song releases core\'s exit (back where the song came from); Play again stays adopted', async () => {
+    const { env, shown } = adoptEnv();
+    const { rt, calls, fb } = env;
+    corePlay(env, DRUM_ITEM, 'v3-songs');
+    await flush();
+    fb.emit('song:ended', {});
+    assert.ok(env.player.querySelector('.rhs-results'), 'adopted plays keep the results');
+    rt.next();
+    assert.deepEqual(shown, [], 'not the Solo screen');
+    assert.equal(calls.release, 1, 'core\'s held exit: closeCurrentSong to the origin');
+    assert.deepEqual(calls.showScreen, [], 'not the band screen');
+    // Play again on an adopted play: playSong on the drum arrangement, returning
+    // where the first play came from, and still adopted.
+    corePlay(env, DRUM_ITEM, 'v3-songs');
+    await flush();
+    fb.emit('song:ended', {});
+    rt.again();
+    assert.deepEqual(calls.playSong, [['Beat.sloppak', 1]]);
+    assert.deepEqual(calls.setReturnScreen, ['v3-songs']);
+    env.loadSong(DRUM_ITEM);
+    assert.equal(rt.soloActive(), true, 'the replay is still a one-player session');
+    fb.emit('song:ended', {});
+    rt.next();
+    assert.deepEqual(shown, [], 'the replay is still adopted');
+    assert.equal(calls.release, 2, 'Play again dropped the first hold; Next released the replay\'s');
+    rt.dispose();
+});
+
+test('adopted results with no held exit (an older core): Next song calls core\'s closeCurrentSong', async () => {
+    const { env, shown } = adoptEnv();
+    let closes = 0;
+    env.win.closeCurrentSong = () => { closes++; };
+    delete env.fb.holdAutoExit;
+    corePlay(env, DRUM_ITEM);
+    await flush();
+    env.fb.emit('song:ended', {});
+    env.rt.next();
+    assert.equal(closes, 1);
+    assert.deepEqual(shown, []);
+    env.rt.dispose();
+});
+
+test('a held Back leave in an adopted play is core\'s normal exit, not the Solo screen or band setup', async () => {
+    const { env, shown } = adoptEnv({ adoptPrefs: padPrefs([KIT1], noRealDrums) });
+    let closes = 0;
+    env.win.closeCurrentSong = () => { closes++; };
+    corePlay(env, DRUM_ITEM);
+    await flush();
+    assert.equal(env.rt.phase(), 'playing');
+    env.fb.emit('drums:band-back-hold', { controllerKey: 'Kit#1', canvas: env.mounts[0].ctlCanvas.ctl1 });
+    assert.equal(env.prompts.length, 1);
+    env.prompts[0].resolve(true);
+    await flush();
+    assert.equal(closes, 1);
+    assert.deepEqual(shown, []);
+    assert.deepEqual(env.calls.showScreen, []);
+    env.rt.dispose();
+});
+
+// The Solo screen's element in the runtime's document (screen.js mounts it next to the band screen).
+function addSoloScreen(env) {
+    const el = env.doc.createElement('div');
+    el.id = SOLO_SCREEN_ID;
+    el.className = 'screen';
+    env.doc.body.appendChild(el);
+    parseHtml(SOLO_SCREEN_HTML, env.doc, el);
+    return el;
+}
+
+test('a playSolo session returns straight to the Solo screen (Esc, End song): no band setup on the way, opened once', () => {
+    const { env, shown } = adoptEnv();
+    addSoloScreen(env);
+    env.rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    assert.deepEqual(env.calls.setReturnScreen, [SOLO_SCREEN_ID]);
+    env.loadSong(DRUM_ITEM);
+    coreShow(env.fb, SOLO_SCREEN_ID);
+    assert.equal(env.rt.phase(), 'idle');
+    assert.deepEqual(shown, [], 'the Solo screen shows itself; no second open');
+    // A band session still returns to band setup.
+    env.rt.startSession({ song: DRUM_ITEM, prefs: prefsWith() });
+    assert.deepEqual(env.calls.setReturnScreen, [SOLO_SCREEN_ID, 'plugin-rockherosmith']);
+    env.rt.dispose();
+});
+
+test('one kit solo through playSolo: crowd off, Part sheet, sections, practice false, difficulty; Next to the Solo screen', async () => {
+    let soloScreen = null;
+    let env = null;
+    const openSolo = createOpenSolo({
+        getSoloScreen: () => soloScreen, getScreen: () => null, showScreen: (id) => env.win.showScreen(id),
+    });
+    env = practiceEnv({
+        storageInit: { splitscreenActive: 'true', 'rockherosmith.prefs.v1': JSON.stringify({ solo: { crowd: false, autoNext: false } }) },
+        runtimeOpts: { onShowSoloScreen: ({ next }) => openSolo({ next }) },
+    });
+    const { rt, fb, player, calls, storage } = env;
+    const loadPrefs = () => loadSavedPrefs(storage);
+    const midi = { key: 'td', name: 'TD-17', connected: true };
+    env.win.feedBackDrums.whenMidiReady = async () => midi;
+    env.win.feedBackDrums.midiInput = () => midi;
+    const sheets = [];
+    env.win.feedBackDrums.mountQuickSettings = (el, opts) => { sheets.push(opts); return { destroy() {} }; };
+    const playSolo = createSoloPlay({
+        getRuntime: () => rt, getScreen: () => null, loadPrefs, showScreen: (id) => env.win.showScreen(id), win: env.win,
+    });
+    addSoloScreen(env);
+    soloScreen = createSoloScreen({
+        root: env.doc.getElementById('rockherosmith-solo-root'), win: env.win, doc: env.doc,
+        loadPrefs, savePrefs: (p) => savePrefsTo(p, storage), playSolo, openBand: () => {},
+        fetchJson: async () => ({ songs: [{ ...DRUM_ITEM, has_drum_tab: 1 }], total: 1 }),
+    });
+    const got = playEvents(fb);
+
+    const started = playSolo(DRUM_ITEM, { kind: 'kit', difficulty: 'hard' });
+    for (let i = 0; i < 4; i++) await flush();
+    assert.deepEqual(calls.playSong, [['Beat.sloppak', 1]]);
+    assert.deepEqual(calls.setReturnScreen, [SOLO_SCREEN_ID], 'Esc / End song come back to Solo');
+    env.loadSong(DRUM_ITEM);
+    assert.equal(await started, 'started');
+    fb.currentSong.duration = 30;
+    assert.equal(rt.soloActive(), true);
+    // B2: the Solo screen's crowd meter off.
+    assert.equal(player.querySelectorAll('.rhs-crowd').length, 0, 'no crowd meter');
+    // B1: the Part sheet, with the kit's quick settings on #highway.
+    assert.equal(rt.openPartSheet(), true);
+    assert.equal(sheets.length, 1);
+    assert.equal(sheets[0].canvas, env.highwayCanvas);
+    env.keyWin('KeyP', 'p');
+    assert.equal(rt.stageUi().partSheet, false);
+    // B3: per-section accuracy, not practice, at the solo's difficulty.
+    drumAt(env, 1); drumAt(env, 2);
+    drumAt(env, 11); drumAt(env, 12, 'miss');
+    fb.emit('song:ended', {});
+    assert.equal(got.result.length, 1);
+    const r = got.result[0];
+    assert.equal(r.band, false);
+    assert.equal(r.practice, false);
+    assert.equal(r.players.length, 1);
+    assert.equal(r.players[0].player, 'drums');
+    assert.equal(r.players[0].input, 'kit');
+    assert.equal(r.players[0].difficulty, 'hard');
+    assert.deepEqual(r.players[0].sections, [
+        { name: 'Intro 1', start: 0, end: 10, hits: 2, misses: 0, accuracy: 1 },
+        { name: 'Verse 1', start: 10, end: 20, hits: 1, misses: 1, accuracy: 0.5 },
+    ]);
+    assert.ok(player.querySelector('.rhs-results'));
+    // Next song: the Solo screen (B2's real openSolo), never band setup.
+    rt.next();
+    assert.equal(calls.release, 1);
+    assert.deepEqual(calls.showScreen, [SOLO_SCREEN_ID]);
+    assert.equal(rt.phase(), 'idle');
+    soloScreen.dispose();
+    rt.dispose();
 });
