@@ -244,3 +244,35 @@ test('no host or no players: nothing opens', () => {
     assert.equal(openPartSheet({ doc: t.doc, win: t.win, host: null, players: PLAYERS }), null);
     assert.equal(openPartSheet({ doc: t.doc, win: t.win, host: t.player, players: [] }), null);
 });
+
+// ---- Stop practice (B3's section practice loop) ----
+
+test('while a practice loop runs the sheet offers Stop practice; a click stops it and the button goes', () => {
+    const t = env();
+    let on = true;
+    let stops = 0;
+    const practice = { active: () => on, stop: () => { stops++; on = false; } };
+    const sheet = openPartSheet({ doc: t.doc, win: t.win, host: t.player, players: PLAYERS, practice });
+    const btn = t.player.querySelector('.rhs-part-sheet-stop-practice');
+    assert.ok(btn);
+    assert.equal(btn.textContent, 'Stop practice');
+    btn.click();
+    assert.equal(stops, 1);
+    assert.equal(t.player.querySelector('.rhs-part-sheet-stop-practice'), null);
+    assert.equal(sheet.isOpen(), true, 'the sheet stays open');
+    sheet.close();
+});
+
+test('no loop running, or no practice hook: no Stop practice; a loop alone still opens the sheet', () => {
+    const t = env();
+    const s1 = openPartSheet({ doc: t.doc, win: t.win, host: t.player, players: PLAYERS, practice: { active: () => false, stop() {} } });
+    assert.equal(t.player.querySelector('.rhs-part-sheet-stop-practice'), null);
+    s1.close();
+    const s2 = openPartSheet({ doc: t.doc, win: t.win, host: t.player, players: PLAYERS });
+    assert.equal(t.player.querySelector('.rhs-part-sheet-stop-practice'), null);
+    s2.close();
+    const s3 = openPartSheet({ doc: t.doc, win: t.win, host: t.player, players: [], practice: { active: () => true, stop() {} } });
+    assert.ok(s3, 'a guitar-only band practicing still gets the sheet');
+    assert.ok(t.player.querySelector('.rhs-part-sheet-stop-practice'));
+    s3.close();
+});

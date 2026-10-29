@@ -5475,3 +5475,25 @@ test('band sessions still return to the band screen; a sidebar link is followed,
     assert.deepEqual(b.shown, [], 'followed to Songs, no Solo screen');
     b.env.rt.dispose();
 });
+
+test("the sheet's Stop practice calls the runtime's stopPractice when one is wired (B3)", () => {
+    const g = setup();
+    g.rt.startSession({ song: ITEM, prefs: prefsWith({ drums: { on: false } }) });
+    g.loadSong(ITEM);
+    assert.equal(g.rt.openPartSheet(), false, 'guitar only, no practice hook: nothing');
+    let looping = true;
+    let stops = 0;
+    g.rt.stopPractice = () => { stops++; looping = false; };
+    g.rt.practiceActive = () => looping;
+    g.keyWin('KeyM', 'm');
+    assert.ok(g.sidebar.querySelector('.rhs-sidebar-item'), 'the Part item shows while a loop runs');
+    g.keyWin('KeyM', 'm');
+    assert.equal(g.rt.openPartSheet(), true);
+    const btn = g.player.querySelector('.rhs-part-sheet-stop-practice');
+    assert.ok(btn);
+    btn.click();
+    assert.equal(stops, 1);
+    assert.equal(g.player.querySelector('.rhs-part-sheet-stop-practice'), null);
+    assert.equal(g.calls.pause, 0);
+    g.rt.dispose();
+});

@@ -94,12 +94,18 @@ export function soundModePatch(saved, player, mode, { solo = false } = {}) {
     return solo ? { solo: { soundMode: mode } } : null;
 }
 
-// openPartSheet({ doc, win, host, players, onSoundMode(player, mode), onClose })
-//   -> { kind: 'part', el, isOpen(), close({ silent }) } | null (no host or no players)
+// openPartSheet({ doc, win, host, players, onSoundMode(player, mode), onClose, practice })
+//   practice (optional): { active(): boolean, stop() }, a section practice loop (stream
+//   B3); while one runs the sheet offers Stop practice, and opens with no players too.
+//   -> { kind: 'part', el, isOpen(), close({ silent }) } | null (no host, nothing to show)
 // A silent close (teardown, the results) skips onClose and leaves focus alone.
-export function openPartSheet({ doc, win, host, players, onSoundMode, onClose }) {
+export function openPartSheet({ doc, win, host, players, onSoundMode, onClose, practice }) {
     const list = Array.isArray(players) ? players.filter(Boolean) : [];
-    if (!host || !list.length) return null;
+    const looping = () => {
+        if (!practice || typeof practice.active !== 'function' || typeof practice.stop !== 'function') return false;
+        try { return practice.active() === true; } catch (_) { return false; }
+    };
+    if (!host || (!list.length && !looping())) return null;
     const el = (tag, cls, text) => {
         const e = doc.createElement(tag);
         if (cls) e.className = cls;
@@ -118,6 +124,17 @@ export function openPartSheet({ doc, win, host, players, onSoundMode, onClose })
     back.addEventListener('click', () => close());
     head.append(el('h2', 'rhs-part-sheet-title', TITLE), back);
     sheet.append(head, el('p', 'rhs-part-sheet-hint', HINT));
+    if (looping()) {
+        const stop = el('button', 'rhs-part-sheet-stop-practice', 'Stop practice');
+        stop.type = 'button';
+        stop.addEventListener('click', () => {
+            try { practice.stop(); } catch (e) { console.warn('[rockherosmith] stop practice failed', e); }
+            if (looping()) return;
+            stop.remove();
+            try { back.focus({ preventScroll: true }); } catch (_) { /* focus is a nicety */ }
+        });
+        sheet.appendChild(stop);
+    }
 
     const mounted = [];
     for (const p of list) {

@@ -1077,7 +1077,7 @@ export function createBandRuntime({
                 // The stage menu's Part item (B1): the players' quick settings.
                 items: [{
                     id: 'part', label: 'Part', title: 'Part settings (P)',
-                    visible: () => scoring() === s && partPlayers(s).length > 0,
+                    visible: () => scoring() === s && hasPartSheet(s),
                     onSelect: () => openPart(s),
                 }],
             })) || null;
@@ -1127,7 +1127,7 @@ export function createBandRuntime({
         if (isPartSheetKey(e)) {
             const sidebarEl = s.sidebar && s.sidebar.isOpen() ? doc.getElementById('v3-sidebar') : null;
             if (otherModalOpen(doc, win, s.partSheet ? s.partSheet.el : sidebarEl)) return;
-            if (!s.partSheet && !partPlayers(s).length) return;
+            if (!s.partSheet && !hasPartSheet(s)) return;
             e.preventDefault();
             if (e.repeat) return;
             if (s.partSheet) s.partSheet.close();
@@ -1202,15 +1202,34 @@ export function createBandRuntime({
         })) || [];
     }
 
+    // Stream B3's section practice loop, feature-detected on this runtime (wired at
+    // integration): api.stopPractice(), and api.practiceActive() or the session's
+    // practice state (practice.js: mode 'off' when no loop runs). null without it.
+    function practiceControl(s) {
+        if (typeof api.stopPractice !== 'function') return null;
+        const active = () => (typeof api.practiceActive === 'function'
+            ? safe(() => api.practiceActive()) === true
+            : !!(s.practice && typeof s.practice.mode === 'string' && s.practice.mode !== 'off'));
+        return { active, stop: () => safe(() => api.stopPractice()) };
+    }
+
+    // Anything for the sheet: a player with quick settings, or a practice loop to stop.
+    function hasPartSheet(s) {
+        const pc = practiceControl(s);
+        return partPlayers(s).length > 0 || !!(pc && pc.active());
+    }
+
     // Opens over the playing song and never pauses it. The sidebar shuts first.
     function openPart(s) {
         if (s.partSheet || s.overlay || scoring() !== s) return !!s.partSheet;
         const players = partPlayers(s);
-        if (!players.length) return false;
+        const practice = practiceControl(s);
+        if (!players.length && !(practice && practice.active())) return false;
         if (s.sidebar && s.sidebar.isOpen()) s.sidebar.close();
         const sheet = safe(() => openPartSheet({
             doc, win, host: doc.getElementById('player'), players,
             onSoundMode: (p, mode) => setSoundMode(s, p.id, mode),
+            practice,
             onClose: () => { if (s.partSheet === sheet) s.partSheet = null; },
         })) || null;
         s.partSheet = sheet;
@@ -2029,7 +2048,7 @@ export function createBandRuntime({
     if (winEvents) for (const [ev, fn] of Object.entries(winHandlers)) win.addEventListener(ev, fn);
     if (winEvents) win.addEventListener('keydown', onStageKey, true);
 
-    return {
+    const api = {
         dispose() {
             // A pending adopt never lands on a disposed runtime.
             adoptGen++;
@@ -2071,4 +2090,5 @@ export function createBandRuntime({
             };
         },
     };
+    return api;
 }

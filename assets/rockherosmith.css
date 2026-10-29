@@ -782,6 +782,18 @@ body.rhs-settings-over #settings .fb-settings-back { display: none; }
 #player .rhs-part-sheet select:focus-visible,
 #player .rhs-part-sheet input:focus-visible { outline: 2px solid #4aa3ff; outline-offset: 2px; }
 #player .rhs-part-sheet-hint { margin: 4px 0 10px; font-size: 12px; color: #9a99a6; }
+#player .rhs-part-sheet-stop-practice {
+    width: 100%;
+    margin: 0 0 6px;
+    padding: 8px 14px;
+    border-radius: 8px;
+    background: #3a2a10;
+    border: 1px solid #e0a33d;
+    color: #f5d9a8;
+    font: 600 13px/1.2 'Barlow', system-ui, sans-serif;
+    cursor: pointer;
+}
+#player .rhs-part-sheet-stop-practice:hover { background: #4a3614; }
 #player .rhs-part-sheet-player {
     margin-top: 10px;
     padding: 10px 12px;
