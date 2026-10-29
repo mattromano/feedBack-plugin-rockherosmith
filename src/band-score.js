@@ -71,6 +71,12 @@ function apply(entry, state, thresholds, failMode) {
     if (p.failed) return true;
     const scored = Math.round(num(entry.points, 0) * num(entry.factor, 1));
     p.score += scored;
+    // A bonus (a drum solo's, contract §4) is points only: no streak, multiplier,
+    // judgment, crowd or band bonus.
+    if (entry.kind === 'bonus') {
+        if (thresholds.has(entry.part)) p.stars = starsFromScore(p.score, thresholds.get(entry.part));
+        return true;
+    }
     p.multiplier = num(entry.multiplier, 1);
     p.streak = num(entry.streak, 0);
     p.bestStreak = Math.max(p.bestStreak, p.streak);

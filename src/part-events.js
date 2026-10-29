@@ -38,6 +38,13 @@ export function drumsEntry(type, detail, t, bandCanvas, id = 'drums') {
     };
 }
 
+// A drum solo's bonus paid on `bandCanvas` (drums:bonus, play layer contract §4), for
+// player `id`: points only, so it carries no multiplier or streak.
+export function drumsBonusEntry(detail, t, bandCanvas, id = 'drums') {
+    if (!(bandCanvas && detail && detail.canvas === bandCanvas && finite(detail.points) && detail.points > 0)) return null;
+    return { part: id, t, kind: 'bonus', points: detail.points, reason: typeof detail.reason === 'string' ? detail.reason : null };
+}
+
 // A 5-fret lane's band events (five_fret:<type>), for player `id`. The band scores the five-fret
 // engine's numbers as they are (Decision 8): points are the engine score's delta since the lane's
 // last event, `last = { score, resets }` (null before its first). The engine resets its scoring on

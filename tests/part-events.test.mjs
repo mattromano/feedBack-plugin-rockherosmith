@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { guitarEntry, drumsEntry, vocalsEntry, vocalsTotals, onsetTime, drumsOverdrive, vocalsOverdrive, fiveFretEntry } from '../src/part-events.js';
+import { guitarEntry, drumsEntry, vocalsEntry, vocalsTotals, onsetTime, drumsOverdrive, vocalsOverdrive, fiveFretEntry, drumsBonusEntry } from '../src/part-events.js';
 
 test("guitar: only the default detector's counted judgments score", () => {
     const d = { isDefault: true, counted: true, hit: true, points: 100, multiplier: 2, streak: 12 };
@@ -132,4 +132,18 @@ test('fiveFretEntry maps types, score deltas and resets (by the resets count), h
     // Not a judgment, or no detail.
     for (const type of ['sp-phrase', 'sp-activate', 'band-pause', 'combo-reset']) assert.equal(fiveFretEntry(type, d(), 1, 'ctl1', null), null);
     assert.equal(fiveFretEntry('hit', null, 1, 'ctl1', null), null);
+});
+
+// Play layer contract §4: drums:bonus (a drum solo's bonus) is a points-only ledger entry.
+test('drumsBonusEntry: the lane canvas only, positive finite points only', () => {
+    const canvas = {};
+    assert.deepEqual(drumsBonusEntry({ canvas, points: 1500, reason: 'solo' }, 12.5, canvas),
+        { part: 'drums', t: 12.5, kind: 'bonus', points: 1500, reason: 'solo' });
+    assert.equal(drumsBonusEntry({ canvas, points: 10 }, 1, canvas, 'ctl2').part, 'ctl2');
+    assert.equal(drumsBonusEntry({ canvas: {}, points: 10 }, 1, canvas), null);
+    assert.equal(drumsBonusEntry({ canvas, points: 0 }, 1, canvas), null);
+    assert.equal(drumsBonusEntry({ canvas, points: 'x' }, 1, canvas), null);
+    assert.equal(drumsBonusEntry(null, 1, canvas), null);
+    assert.equal(drumsBonusEntry({ canvas, points: 5 }, 1, null), null);
+    assert.equal(drumsBonusEntry({ canvas, points: 5, reason: 7 }, 1, canvas).reason, null);
 });
