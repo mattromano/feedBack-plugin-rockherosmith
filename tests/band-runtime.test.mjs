@@ -1304,7 +1304,7 @@ test('karaoke phrases score with their totals', async () => {
     rt.dispose();
 });
 
-test("a backward seek rewinds the band score; a loop wrap doesn't", () => {
+test('a backward seek rewinds the band score; so does a loop wrap, to the loop start', () => {
     const { rt, fb, loadSong, player, clock, fireWin } = setup();
     rt.startSession({ song: ITEM, prefs: prefsWith() });
     loadSong(ITEM);
@@ -1313,12 +1313,15 @@ test("a backward seek rewinds the band score; a loop wrap doesn't", () => {
     clock.t = 20;
     fireWin('notedetect:hit', guitarHit({ points: 70, streak: 2 }));
     assert.equal(scoreText(player), '120');
-    fb.emit('song:seek', { from: 20, to: 10.5, reason: 'loop-wrap' });
-    assert.equal(scoreText(player), '120', 'a loop wrap stays cumulative');
     fb.emit('song:seek', { from: 20, to: 19.98 });
     assert.equal(scoreText(player), '120', 'within 50 ms is not a rewind');
     fb.emit('song:seek', { from: 20, to: 15 });
     assert.equal(scoreText(player), '50');
+    fireWin('notedetect:hit', guitarHit({ points: 70, streak: 2 }));
+    assert.equal(scoreText(player), '120');
+    // Stream B3: every pass of a loop starts from the score at the loop start.
+    fb.emit('song:seek', { from: 20, to: 10.5, reason: 'loop-wrap' });
+    assert.equal(scoreText(player), '50', 'a loop wrap rewinds to A');
     fb.emit('song:seek', { from: 15, to: 30 });
     fb.emit('song:seek', { from: NaN, to: 0 });
     assert.equal(scoreText(player), '50', 'forward and malformed seeks keep the score');
@@ -5210,4 +5213,196 @@ test('play:result reports the difficulty at song end: a 5-fret quick setting, th
     d.fb.emit('song:ended', {});
     assert.equal(g2.result[0].players[0].difficulty, 'expert');
     d.rt.dispose();
+});
+
+// ---- Stream B3: sections, practice, run history ----
+
+// The song's section markers and core's loop / speed, recorded.
+function practiceEnv(opts) {
+    const env = setup(opts);
+    env.calls.setLoopAB = [];
+    env.calls.clearLoopB3 = 0;
+    env.calls.speed = [];
+    env.sections = [{ name: 'intro', time: 0 }, { name: 'verse', time: 10 }, { name: 'chorus', time: 20 }];
+    env.win.highway.getSections = () => env.sections;
+    env.fb.setLoop = (a, b) => { env.calls.setLoopAB.push([a, b]); return Promise.resolve(true); };
+    env.fb.clearLoop = () => { env.calls.clearLoopB3++; };
+    env.win.setSpeed = (r) => { env.calls.speed.push(r); };
+    return env;
+}
+const drumAt = (env, t, type = 'hit') => {
+    env.clock.t = t;
+    env.fb.emit('drums:' + type, drEv(env.highwayCanvas, { points: type === 'hit' ? 100 : 0, combo: type === 'hit' ? 1 : 0 }));
+};
+
+test('play:result: per-section accuracy per player, from the ledger and the song sections', () => {
+    const env = practiceEnv();
+    const { rt, fb, loadSong } = env;
+    const got = playEvents(fb);
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    fb.currentSong.duration = 30;
+    drumAt(env, 1); drumAt(env, 2);
+    drumAt(env, 11); drumAt(env, 12, 'miss'); drumAt(env, 13, 'miss'); drumAt(env, 14, 'overhit');
+    fb.emit('song:ended', {});
+    assert.deepEqual(got.result[0].players[0].sections, [
+        { name: 'Intro 1', start: 0, end: 10, hits: 2, misses: 0, accuracy: 1 },
+        { name: 'Verse 1', start: 10, end: 20, hits: 1, misses: 2, accuracy: 1 / 3 },
+    ]);
+    assert.equal(got.result[0].practice, false);
+    // The results list them on the card.
+    const rows = env.player.querySelectorAll('button.rhs-section');
+    assert.deepEqual(rows.map((b) => b.textContent), ['Intro 1100%', 'Verse 133%']);
+    rt.dispose();
+});
+
+test('a loop wrap makes the session practice: play:result practice true', () => {
+    const env = practiceEnv();
+    const { rt, fb, loadSong } = env;
+    const got = playEvents(fb);
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    drumAt(env, 12);
+    fb.emit('song:seek', { from: 20, to: 10, reason: 'loop-wrap' });
+    fb.emit('song:ended', {});
+    assert.equal(got.result[0].practice, true);
+    rt.dispose();
+});
+
+test('sections with no song duration: the last one runs past the last judgment', () => {
+    const env = practiceEnv();
+    const { rt, fb, loadSong } = env;
+    const got = playEvents(fb);
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    drumAt(env, 21); drumAt(env, 29);
+    fb.emit('song:ended', {});
+    assert.deepEqual(got.result[0].players[0].sections, [{ name: 'Chorus 1', start: 20, end: 30, hits: 2, misses: 0, accuracy: 1 }]);
+    rt.dispose();
+});
+
+test('a song slowed down at the results is practice', () => {
+    const env = practiceEnv();
+    const { rt, fb, loadSong, audio } = env;
+    const got = playEvents(fb);
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    drumAt(env, 1);
+    audio.playbackRate = 0.8;
+    fb.emit('song:ended', {});
+    assert.equal(got.result[0].practice, true);
+    rt.dispose();
+});
+
+test('fail mode: loop passes never pile up into a failure, and practice never ends the song', () => {
+    const env = practiceEnv();
+    const { rt, fb, loadSong } = env;
+    rt.startSession({ song: DRUM_ITEM, prefs: { ...kitSolo(), failMode: 'fail' }, solo: true });
+    loadSong(DRUM_ITEM);
+    // Eight misses a pass (14 empty the crowd), three passes.
+    for (let pass = 0; pass < 3; pass++) {
+        for (let i = 0; i < 8; i++) drumAt(env, 10 + i, 'miss');
+        fb.emit('song:seek', { from: 20, to: 10, reason: 'loop-wrap' });
+    }
+    assert.equal(rt.snapshot().parts.drums.failed, false);
+    assert.equal(rt.phase(), 'playing');
+    // Practicing, a pass that empties the crowd drops the player but doesn't end the song.
+    for (let i = 0; i < 14; i++) drumAt(env, 10 + i * 0.5, 'miss');
+    assert.equal(rt.snapshot().parts.drums.failed, true);
+    assert.equal(rt.phase(), 'playing');
+    fb.emit('song:seek', { from: 20, to: 10, reason: 'loop-wrap' });
+    assert.equal(rt.snapshot().parts.drums.failed, false, 'the next pass brings them back');
+    rt.dispose();
+});
+
+test('without practice, fail mode still ends the song', () => {
+    const env = practiceEnv();
+    const { rt, loadSong } = env;
+    rt.startSession({ song: DRUM_ITEM, prefs: { ...kitSolo(), failMode: 'fail' }, solo: true });
+    loadSong(DRUM_ITEM);
+    for (let i = 0; i < 14; i++) drumAt(env, 1 + i, 'miss');
+    assert.equal(rt.phase(), 'ending');
+    rt.dispose();
+});
+
+test('results: a section click plays again and loops it at the chosen speed; a drill scores the passes', async () => {
+    const env = practiceEnv();
+    const { rt, fb, loadSong, player, calls } = env;
+    const got = playEvents(fb);
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    fb.currentSong.duration = 30;
+    drumAt(env, 11, 'miss'); drumAt(env, 12);
+    fb.emit('song:ended', {});
+    player.querySelectorAll('button.rhs-speed')[1].click();
+    player.querySelector('button.rhs-drill').click();
+    player.querySelectorAll('button.rhs-section').find((b) => b.textContent.startsWith('Verse')).click();
+    assert.equal(player.querySelector('.rhs-results'), null, 'the results close');
+    assert.equal(calls.playSong.length, 2, 'Play again');
+    await flush();
+    assert.deepEqual(calls.setLoopAB, [], 'nothing loops before the song is ready');
+    loadSong(DRUM_ITEM);
+    await flush();
+    assert.deepEqual(calls.setLoopAB, [[10, 20]]);
+    assert.deepEqual(calls.speed, [0.9]);
+    // A pass at 50%: hold. A pass at 100%: speed up to full. Then three clears.
+    drumAt(env, 11); drumAt(env, 12, 'miss');
+    fb.emit('song:seek', { from: 20, to: 10, reason: 'loop-wrap' });
+    const toasts = () => toastTexts(player);
+    assert.ok(toasts().includes('Verse 1: 50%, need 90% (0 of 3)'));
+    drumAt(env, 11); drumAt(env, 12);
+    fb.emit('song:seek', { from: 20, to: 10, reason: 'loop-wrap' });
+    assert.deepEqual(calls.speed, [0.9, 1]);
+    for (let i = 0; i < 3; i++) {
+        drumAt(env, 15);
+        fb.emit('song:seek', { from: 20, to: 10, reason: 'loop-wrap' });
+    }
+    assert.ok(toasts().includes('Drill done: Verse 1 at 90% three times'));
+    assert.equal(calls.clearLoopB3, 1);
+    fb.emit('song:ended', {});
+    assert.equal(got.result[1].practice, true, 'a practice replay is never scored');
+    rt.dispose();
+});
+
+test('results: bests and recent runs per player, again after stats:recorded; silent on an older core', async () => {
+    const urls = [];
+    let recorded = false;
+    let fail = false;
+    const fetchJson = async (url) => {
+        urls.push(url);
+        if (fail) throw new Error('404');
+        if (!url.startsWith('/api/stats/history')) return { master_difficulty: 60 };
+        const mine = recorded ? [{ score: 300, accuracy: 1, session_id: sessionId, player: 'drums' }] : [];
+        return { best: { plays: recorded ? 3 : 2, best_score: recorded ? 300 : 250, best_accuracy: 0.9 }, runs: [...mine, { score: 250, accuracy: 0.9 }] };
+    };
+    let sessionId = null;
+    const env = practiceEnv({ runtimeOpts: { fetchJson } });
+    const { rt, fb, loadSong, player } = env;
+    fb.on('play:result', (e) => { sessionId = e.detail.sessionId; });
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo({ difficulty: 'hard' }), solo: true });
+    loadSong(DRUM_ITEM);
+    drumAt(env, 1); drumAt(env, 2); drumAt(env, 3);
+    fb.emit('song:ended', {});
+    await flush();
+    const hist = () => player.querySelector('div.rhs-card[data-part="drums"]').querySelector('div.rhs-history');
+    assert.deepEqual(urls.filter((u) => u.startsWith('/api/stats/history')),
+        ['/api/stats/history?filename=Beat.sloppak&part=drums&difficulty=hard&limit=5']);
+    assert.equal(hist().querySelector('.rhs-new-best').textContent, 'New best!');
+    recorded = true;
+    fb.emit('stats:recorded', { filename: DRUM_ITEM.filename });
+    await flush();
+    assert.equal(urls.filter((u) => u.startsWith('/api/stats/history')).length, 2);
+    assert.equal(hist().querySelector('.rhs-new-best').textContent, 'New best!');
+    assert.deepEqual(hist().querySelectorAll('span.rhs-hist-run').map((r) => r.textContent), ['250 · 90%']);
+    rt.next();
+    // An older core: no history shows, nothing throws.
+    fail = true;
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    drumAt(env, 1);
+    fb.emit('song:ended', {});
+    await flush();
+    assert.ok(player.querySelector('.rhs-results'));
+    assert.equal(player.querySelector('div.rhs-history'), null);
+    rt.dispose();
 });

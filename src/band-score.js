@@ -140,6 +140,10 @@ export function createBandScore({ parts, failMode = 'nofail' }) {
             entries.push(copy);
             apply(copy, state, thresholds, failMode);
         },
+        // The ledger as recorded (copies), for per-section accuracy (sections.js).
+        entries() {
+            return entries.map((entry) => ({ ...entry }));
+        },
         rewindTo(t) {
             entries = entries.filter((entry) => !(entry.t > t));
             replay();

@@ -28,8 +28,10 @@ import { guitarStarThresholds, fullChartThresholds } from './stars.js';
 import { createBandHud } from './hud.js';
 import { createToastStack } from './toasts.js';
 import { createCountInOverlay } from './count-in-overlay.js';
-import { resultsModel } from './results.js';
+import { resultsModel, createHistoryLoader } from './results.js';
 import { showResultsScreen, isTyping } from './results-screen.js';
+import { sectionRanges, playerSections, rangeTally, entryTime } from './sections.js';
+import { initialPractice, reducePractice, isPractice } from './practice.js';
 import { createFullScreen } from './full-screen.js';
 import { createStageChrome } from './stage-chrome.js';
 import { createSidebarOverlay } from './sidebar-overlay.js';
@@ -579,8 +581,9 @@ export function createBandRuntime({
 
     // play:result (contract §3), once per session, when the results open.
     // drumsSt: the real drummer's engine state, already read for the results.
+    // Returns the detail it sent (null when it sent none), for the run history.
     function emitResult(s, drumsSt) {
-        if (s.resultSent || typeof fb.emit !== 'function') return;
+        if (s.resultSent || typeof fb.emit !== 'function') return null;
         s.resultSent = true;
         const arrangements = {};
         for (const id of s.scoreParts) {
@@ -614,9 +617,93 @@ export function createBandRuntime({
         const detail = resultEvent({
             filename: s.item.filename, sessionId: s.sessionId,
             snapshot: s.score ? s.score.snapshot() : null, prefs: s.prefs, arrangements, proDrums, difficulties,
-            practice: false, durationSec: displayTime(s),
+            practice: isPractice(s.practice), sections: sessionSections(s), durationSec: displayTime(s),
         });
         safe(() => fb.emit('play:result', detail));
+        return detail;
+    }
+
+    // ── Stream B3: per-section accuracy, practice and run history ──────────
+    // Each player's sections (sections.js) from the ledger and the song's
+    // markers, read once when the results open (the song is still loaded).
+    function sessionSections(s) {
+        if (s.sections) return s.sections;
+        const hw = win.highway;
+        const raw = hw && typeof hw.getSections === 'function' ? safe(() => hw.getSections()) : null;
+        const audio = doc.getElementById('audio');
+        const entries = s.score && typeof s.score.entries === 'function' ? s.score.entries() : [];
+        // No duration known (the desktop engine's): the last section runs past the last judgment.
+        let dur = fb.currentSong && Number.isFinite(fb.currentSong.duration) ? fb.currentSong.duration
+            : (audio ? Number(audio.duration) : NaN);
+        if (!Number.isFinite(dur)) dur = Math.max(0, ...entries.map(entryTime).filter(Number.isFinite)) + 1;
+        s.sections = playerSections(entries, sectionRanges(raw, dur), s.scoreParts) || {};
+        return s.sections;
+    }
+
+    // The song's playback rate now (core's speed slider), or NaN.
+    function playbackRate() {
+        if (win._juceMode) return Number(win.jucePlayer && win.jucePlayer._speed);
+        const audio = doc.getElementById('audio');
+        return audio ? Number(audio.playbackRate) : NaN;
+    }
+
+    // practice.js's effects through core: the A-B loop (window.feedBack.setLoop /
+    // clearLoop), the speed (window.setSpeed) and the toast stack.
+    function practiceDispatch(s, action) {
+        const { state: next, effects } = reducePractice(s.practice || initialPractice(), action);
+        s.practice = next;
+        const syncLoop = () => { if (s.chrome) { const c = s.chrome; const st = loopState(); safe(() => c.setLoop(st)); } };
+        for (const e of effects) {
+            if (e.type === 'setLoop') {
+                if (typeof fb.setLoop !== 'function') { showToast(s, 'Looping a section needs a newer feedBack'); continue; }
+                Promise.resolve().then(() => fb.setLoop(e.start, e.end, { reason: 'rockherosmith-practice' }))
+                    .then(syncLoop, (err) => console.warn('[rockherosmith] practice loop failed', err));
+            } else if (e.type === 'clearLoop') {
+                if (typeof fb.clearLoop === 'function') safe(() => fb.clearLoop({ reason: 'rockherosmith-practice' }));
+                else if (typeof win.clearLoop === 'function') safe(() => win.clearLoop());
+                syncLoop();
+            } else if (e.type === 'setSpeed') {
+                if (typeof win.setSpeed === 'function') safe(() => win.setSpeed(e.rate));
+            } else if (e.type === 'toast') {
+                showToast(s, e.text);
+            }
+        }
+    }
+
+    // A loop pass ended (core's loop-wrap seek back to A): it was practice, the
+    // drill scores the pass, then the ledger rewinds to A like a backward seek,
+    // so every pass starts from the same score, crowd and drop-outs (a loop never
+    // piles up into a failure).
+    function practiceWrap(s, d) {
+        const loop = typeof fb.getLoop === 'function' ? safe(() => fb.getLoop()) : null;
+        const end = loop && Number.isFinite(loop.loopB) ? loop.loopB : d.from;
+        practiceDispatch(s, { type: 'wrap' });
+        practiceDispatch(s, { type: 'rate', rate: playbackRate() });
+        const pass = rangeTally(s.score.entries(), d.to, end + 0.001, s.scoreParts);
+        practiceDispatch(s, { type: 'pass', accuracy: pass.accuracy });
+        s.score.rewindTo(d.to);
+        s.lastT = d.to;
+        if (s.vocalsReset !== undefined) s.score.syncTotals('vocals', s.vocalsReset);
+        refreshHud(s, true);
+        syncFailures(s, { silent: true });
+    }
+
+    // Results "Practice this section": Play again, then loop it once the replay plays.
+    function practiceFromResults(plan) {
+        dispatch({ type: 'again' });
+        const next = session;
+        if (!next) return;
+        next.practicePlan = plan;
+        Promise.resolve(next.played).then(() => applyPracticePlan(next), () => {});
+    }
+
+    // Starts a pending practice when the session plays (after core's song load,
+    // which clears the loop and resets the speed). Runs once.
+    function applyPracticePlan(s) {
+        if (!s || !s.practicePlan || session !== s || state.phase !== 'playing') return;
+        const plan = s.practicePlan;
+        s.practicePlan = null;
+        practiceDispatch(s, { type: 'start', section: plan.section, speed: plan.speed, drill: plan.drill });
     }
 
     // The drums players' sound modes (the real drummer, drums controllers), with Rock
@@ -840,7 +927,8 @@ export function createBandRuntime({
             }
         }
         if (s.stemSound) syncStemSound(s, s.stemSound.setFailed([...s.failed]));
-        if (snap.bandFailed && !s.bandFailed && session === s && state.phase === 'playing') {
+        // Practice never fails the song: the next loop pass rewinds the drop-outs.
+        if (snap.bandFailed && !s.bandFailed && session === s && state.phase === 'playing' && !isPractice(s.practice)) {
             s.bandFailed = true;
             dispatch({ type: 'failed' });
         }
@@ -1450,7 +1538,9 @@ export function createBandRuntime({
             const player = doc.getElementById('player');
             if (s.results) return;
             const drumsSt = s.scoreParts.includes('drums') ? safe(() => drumsState(s)) : null;
-            emitResult(s, drumsSt);
+            // A song slowed down to its end was practice too (B3).
+            practiceDispatch(s, { type: 'rate', rate: playbackRate() });
+            const result = emitResult(s, drumsSt);
             // The sidebar is for the playing song only (plan 7 R21).
             if (s.sidebar) { const sb = s.sidebar; safe(() => sb.close()); }
             // So are Settings and the leave prompt: closed, resuming nothing.
@@ -1463,15 +1553,26 @@ export function createBandRuntime({
                 drumsExtra: drumsStarPower(drumsSt),
                 failed: s.bandFailed,
                 controllerInfo: controllerInfo(s),
+                sections: safe(() => sessionSections(s)) || {},
             }));
             s.results = model ? safe(() => showResultsScreen({
                 doc, win, host: player, model,
                 onAgain: () => dispatch({ type: 'again' }),
                 onNext: () => dispatch({ type: 'next' }),
+                onPractice: (p) => practiceFromResults(p),
             })) || null : null;
-            if (!s.results) { s.autoNext = true; dispatch({ type: 'next' }); }
+            if (!s.results) { s.autoNext = true; dispatch({ type: 'next' }); return; }
+            // Bests and recent runs per player (core's stats history; silent without it).
+            const shown = s.results;
+            if (result) {
+                s.history = safe(() => createHistoryLoader({
+                    getJson, fb, result,
+                    onView: (part, view) => { if (typeof shown.setHistory === 'function') shown.setHistory(part, view); },
+                })) || null;
+            }
         },
         hideResults(s) {
+            if (s.history) { const h = s.history; s.history = null; safe(() => h.dispose()); }
             if (!s.results) return;
             const r = s.results;
             s.results = null;
@@ -1809,9 +1910,11 @@ export function createBandRuntime({
         if (s.drumSound && s.drumSound.seek()) syncDrumSound(s);
         // So do controllers' dropped stems (Review Focus 5).
         if (s.stemSound) syncStemSound(s, s.stemSound.seek());
-        // A loop wrap keeps the ledger; the looped phrases earn again (R8).
+        // A loop wrap: the looped phrases earn overdrive again (R8); the pass is
+        // practice and the ledger rewinds to the loop start (B3, practiceWrap).
         if (d.reason === 'loop-wrap') {
             if (s.od) { const od = s.od; safe(() => od.loopWrap(d.to)); }
+            practiceWrap(s, d);
             return;
         }
         if (!(d.to < d.from - REWIND_MIN_S)) return;
@@ -1822,6 +1925,10 @@ export function createBandRuntime({
         refreshHud(s, true);
         syncFailures(s, { silent: true });
     };
+    // A results "Practice this section" replay whose play resolved before it was
+    // ready starts its loop here (B3).
+    const readyBase = handlers['song:ready'];
+    handlers['song:ready'] = (e) => { readyBase(e); if (session) applyPracticePlan(session); };
     // Controller lanes (Ruling 9): one listener per event name for every kind.
     // A real part's handler on the same name (Plan 6's drums:*) keeps running first.
     for (const { name, type } of lanes.events) {

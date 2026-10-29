@@ -2,7 +2,11 @@
 // band's stars, score and song, one card per part, and Play again / Next song.
 // Enter and Escape are Next song, R is Play again; the player's own keys are held
 // off while it shows. Draws only: the caller decides what the buttons do.
+// Stream B3: each card lists its sections (the worst highlighted; a click asks
+// onPractice to loop it, at the speed and drill chosen in the practice bar),
+// and setHistory(part, view) fills in its best and recent runs when they come.
 import { icon } from './icons.js';
+import { PRACTICE_SPEEDS, DRILL_GOAL, DRILL_REPS } from './practice.js';
 import { formatScore } from './hud-model.js';
 import { holdMediaKeys } from './media-keys.js';
 
@@ -27,8 +31,18 @@ function focus(el) {
     }
 }
 
-// showResultsScreen({ doc, win, host, model, onAgain, onNext }) -> { hide() }
-export function showResultsScreen({ doc, win, host, model, onAgain, onNext }) {
+const TIMES = { 1: 'once', 2: 'two times', 3: 'three times' };
+
+function historyRun(r) {
+    const pct = Number.isFinite(r.accuracyPct) ? r.accuracyPct + '%' : '';
+    return formatScore(r.score) + ' · ' + (r.fullCombo ? 'FC' : pct);
+}
+
+// showResultsScreen({ doc, win, host, model, onAgain, onNext, onPractice? })
+//   -> { hide(), setHistory(part, historyView) }
+// onPractice({ part, section: { name, start, end }, speed, drill }): a section was
+// picked; without it the sections are listed only.
+export function showResultsScreen({ doc, win, host, model, onAgain, onNext, onPractice }) {
     const el = (tag, cls, parent) => {
         const e = doc.createElement(tag);
         if (cls) e.className = cls;
@@ -68,11 +82,18 @@ export function showResultsScreen({ doc, win, host, model, onAgain, onNext }) {
     el('div', 'rhs-results-score', head).textContent = formatScore(m.score);
     el('div', 'rhs-results-sub', head).textContent = m.subtitle || '';
 
+    // The practice choices, read when a section is clicked.
+    const practice = { speed: 1, drill: false };
+    const canPractice = typeof onPractice === 'function';
+    const sectionButtons = [];
+
     // One card per part.
     const grid = el('div', 'rhs-cards', inner);
+    const cardEls = new Map();
     for (const c of Array.isArray(m.cards) ? m.cards : []) {
         const card = el('div', 'rhs-card', grid);
         card.setAttribute('data-part', c.part);
+        cardEls.set(c.part, card);
         if (c.color) card.style.setProperty('--rhs-c', c.color);
         const top = el('div', 'rhs-card-top', card);
         iconIn(top, 'rhs-card-icon', c.icon, 28);
@@ -85,11 +106,61 @@ export function showResultsScreen({ doc, win, host, model, onAgain, onNext }) {
             el('span', 'rhs-stat-label', row).textContent = label;
             el('span', 'rhs-stat-value', row).textContent = value;
         }
+        const sections = Array.isArray(c.sections) ? c.sections : [];
+        if (sections.length) {
+            const list = el('div', 'rhs-sections', card);
+            el('div', 'rhs-sections-label', list).textContent = 'Sections';
+            for (const sec of sections) {
+                const row = el(canPractice ? 'button' : 'span', 'rhs-section', list);
+                if (sec.worst) row.classList.add('rhs-worst');
+                el('span', 'rhs-section-name', row).textContent = sec.name;
+                el('span', 'rhs-section-pct', row).textContent = sec.pct + '%';
+                if (!canPractice) continue;
+                row.type = 'button';
+                row.setAttribute('aria-label', 'Practice ' + sec.name + ', ' + sec.pct + '%');
+                row.setAttribute('title', 'Practice ' + sec.name);
+                row.addEventListener('click', () => onPractice({
+                    part: c.part, section: { name: sec.name, start: sec.start, end: sec.end },
+                    speed: practice.speed, drill: practice.drill,
+                }));
+                sectionButtons.push(row);
+            }
+        }
         if (c.award) {
             const award = el('span', 'rhs-award', card);
             iconIn(award, 'rhs-award-icon', 'trophy', 14);
             el('span', 'rhs-award-text', award).textContent = c.award;
         }
+    }
+
+    // The practice bar: speed steps and the drill switch, for the section clicks.
+    const practiceButtons = [];
+    if (sectionButtons.length) {
+        const bar = el('div', 'rhs-practice', inner);
+        el('span', 'rhs-practice-label', bar).textContent = 'Practice a section';
+        const speeds = el('div', 'rhs-speeds', bar);
+        speeds.setAttribute('role', 'group');
+        speeds.setAttribute('aria-label', 'Practice speed');
+        const speedButtons = PRACTICE_SPEEDS.map((rate) => {
+            const b = el('button', 'rhs-speed', speeds);
+            b.type = 'button';
+            b.textContent = Math.round(rate * 100) + '%';
+            b.addEventListener('click', () => {
+                practice.speed = rate;
+                speedButtons.forEach((x, i) => x.setAttribute('aria-pressed', String(PRACTICE_SPEEDS[i] === rate)));
+            });
+            return b;
+        });
+        speedButtons.forEach((x, i) => x.setAttribute('aria-pressed', String(PRACTICE_SPEEDS[i] === practice.speed)));
+        const drill = el('button', 'rhs-drill', bar);
+        drill.type = 'button';
+        drill.textContent = 'Drill: ' + Math.round(DRILL_GOAL * 100) + '% ' + (TIMES[DRILL_REPS] || DRILL_REPS + ' times');
+        drill.setAttribute('aria-pressed', 'false');
+        drill.addEventListener('click', () => {
+            practice.drill = !practice.drill;
+            drill.setAttribute('aria-pressed', String(practice.drill));
+        });
+        practiceButtons.push(...speedButtons, drill);
     }
 
     const btns = el('div', 'rhs-results-btns', inner);
@@ -114,7 +185,7 @@ export function showResultsScreen({ doc, win, host, model, onAgain, onNext }) {
     //   Escape: Next song.
     //   Enter: a focused button activates natively; on the dialog or body it is
     //   Next song. R: Play again. Typing targets keep Enter and R.
-    const focusables = [again, next];
+    const focusables = [...sectionButtons, ...practiceButtons, again, next];
     function onKey(e) {
         if (!e || e.ctrlKey || e.metaKey || e.altKey) return;
         const swallow = () => { e.preventDefault(); e.stopPropagation(); };
@@ -148,7 +219,35 @@ export function showResultsScreen({ doc, win, host, model, onAgain, onNext }) {
     // Media keys would play the ended song behind the dialog (plan 7 R15).
     const releaseMedia = holdMediaKeys(win.navigator);
     let shown = true;
+    // A card's run history (results.js historyView), replacing any shown before.
+    function setHistory(part, view) {
+        const card = shown && view ? cardEls.get(part) : null;
+        if (!card) return;
+        const old = card.querySelector('div.rhs-history');
+        if (old) old.remove();
+        const box = el('div', 'rhs-history');
+        if (view.newBest) el('div', 'rhs-new-best', box).textContent = 'New best!';
+        else if (view.firstRun) el('div', 'rhs-first-run', box).textContent = 'First run';
+        if (view.best) {
+            const row = el('div', 'rhs-hist-best', box);
+            el('span', 'rhs-stat-label', row).textContent = 'Best';
+            const pct = Number.isFinite(view.best.accuracyPct) ? ' · ' + view.best.accuracyPct + '%' : '';
+            el('span', 'rhs-stat-value', row).textContent = formatScore(view.best.score) + pct;
+        }
+        const recent = Array.isArray(view.recent) ? view.recent : [];
+        if (recent.length) {
+            const runs = el('div', 'rhs-hist-runs', box);
+            el('span', 'rhs-stat-label', runs).textContent = 'Last runs';
+            for (const r of recent) el('span', 'rhs-hist-run', runs).textContent = historyRun(r);
+        }
+        if (!box.children.length) return;
+        // Above the sections and award: after the stats.
+        const anchor = card.querySelector('div.rhs-sections') || card.querySelector('span.rhs-award');
+        if (anchor && typeof card.insertBefore === 'function') card.insertBefore(box, anchor);
+        else card.appendChild(box);
+    }
     return {
+        setHistory,
         hide() {
             if (!shown) return;
             shown = false;

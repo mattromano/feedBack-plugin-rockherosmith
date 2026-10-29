@@ -681,6 +681,43 @@ body.rhs-band-song #count-in-overlay { display: none !important; }
     background: linear-gradient(180deg, #4aa3ff, #2a6fd6); box-shadow: 0 6px 24px #2a6fd655;
 }
 #player .rhs-results-btns button:focus-visible { outline: 2px solid #4aa3ff; outline-offset: 3px; }
+/* Stream B3: run history, section chips (the worst in red, each a practice
+   button) and the practice bar (speed steps, drill switch). */
+#player .rhs-history { margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a2a36; font-size: 13px; }
+#player .rhs-new-best, #player .rhs-first-run {
+    display: inline-block; margin-bottom: 6px; padding: 3px 8px; border-radius: 6px;
+    font: 800 12px/1.3 'Unbounded', system-ui, sans-serif; letter-spacing: 0.06em; text-transform: uppercase;
+}
+#player .rhs-new-best { color: #1a1300; background: linear-gradient(180deg, #ffd23f, #f5a623); box-shadow: 0 0 14px #ffb80066; }
+#player .rhs-first-run { color: #ecebf2; background: #2a2a36; }
+#player .rhs-hist-best { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
+#player .rhs-hist-runs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 4px 0; }
+#player .rhs-hist-runs .rhs-stat-label { flex-basis: 100%; }
+#player .rhs-hist-run { color: #c9c8d6; font-variant-numeric: tabular-nums; font-size: 12px; }
+#player .rhs-sections { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+#player .rhs-sections-label { flex-basis: 100%; color: #8d8ca0; font-size: 12px; }
+#player .rhs-section {
+    display: inline-flex; gap: 6px; align-items: baseline; padding: 3px 8px; border-radius: 6px;
+    background: #1d1d27; border: 1px solid #2a2a36; color: #ecebf2; font: 500 12px/1.3 'Barlow', system-ui, sans-serif;
+}
+#player button.rhs-section { cursor: pointer; }
+#player button.rhs-section:hover { border-color: var(--rhs-c, #8d8ca0); }
+#player .rhs-section-pct { font-variant-numeric: tabular-nums; color: #8d8ca0; }
+#player .rhs-section.rhs-worst { border-color: #ff5a4a88; background: #ff3b2f1f; }
+#player .rhs-section.rhs-worst .rhs-section-pct { color: #ff7a6e; }
+#player .rhs-practice {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 14px; margin-top: 18px;
+    font-size: 13px; color: #8d8ca0;
+}
+#player .rhs-speeds { display: inline-flex; gap: 4px; }
+#player .rhs-speed, #player .rhs-drill {
+    padding: 4px 10px; border-radius: 6px; border: 1px solid #2a2a36; background: #1d1d27; color: #ecebf2;
+    font: 600 12px/1.3 'Barlow', system-ui, sans-serif; cursor: pointer;
+}
+#player .rhs-speed[aria-pressed="true"], #player .rhs-drill[aria-pressed="true"] { border-color: #4aa3ff; background: #4aa3ff26; }
+#player .rhs-section:focus-visible, #player .rhs-speed:focus-visible, #player .rhs-drill:focus-visible {
+    outline: 2px solid #4aa3ff; outline-offset: 2px;
+}
 @media (max-width: 720px) {
     #player .rhs-cards { grid-template-columns: minmax(0, 1fr); }
     #player .rhs-results-score { font-size: 34px; }

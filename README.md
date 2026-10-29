@@ -90,6 +90,20 @@ None of these does anything while a band song is playing.
 - **Guitar input errors.** In a band song note_detect doesn't block with an alert. The band
   shows "Guitar input couldn't start" instead.
 
+## Results: sections, practice and your bests
+
+- **Sections.** Each card lists the song's sections with that player's accuracy in them; the
+  two worst (below 100%, at least 4 notes) are marked in red.
+- **Practice a section.** Click a section to play the song again looping it with core's A-B
+  loop. The practice bar sets the speed (100/90/80/70%) and the drill: loop until 90% three
+  times in a row, speeding up a step after each clear below full speed. Every loop pass starts
+  from the score at the loop start, and a practice song never ends in Band failed.
+- **Practice isn't scored.** A song that looped or was slowed down is sent as practice, so
+  feedBack keeps no stats, XP or bests for it.
+- **Bests.** With a feedBack that has run history, each drums, 5-fret and vocals card shows
+  your best for the song, part and difficulty, your last runs, and "New best!" when this run
+  beats it.
+
 ## Development
 
 ```

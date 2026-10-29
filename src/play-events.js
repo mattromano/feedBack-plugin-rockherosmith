@@ -57,9 +57,10 @@ export function judgmentEvent({ filename, sessionId, entry, info, totals }) {
 // play:result from the band score snapshot. arrangements: { playerId: arrangement
 // index loaded } (missing: null); proDrums: { playerId: pro cymbals in effect } (drums
 // players only; missing: false). failed: the player dropped out in fail mode at any
-// point (rescued or not). practice and sections are stream B3's.
+// point (rescued or not). practice: the session looped or slowed down (practice.js).
 // difficulties: { playerId: difficulty at song end } where it differs from the prefs'.
-export function resultEvent({ filename, sessionId, snapshot, prefs, arrangements = {}, proDrums = {}, difficulties = {}, practice = false, durationSec }) {
+// sections: { playerId: [{ name, start, end, hits, misses, accuracy }] } (sections.js).
+export function resultEvent({ filename, sessionId, snapshot, prefs, arrangements = {}, proDrums = {}, difficulties = {}, practice = false, sections = {}, durationSec }) {
     const parts = (snapshot && snapshot.parts) || {};
     const players = Object.keys(parts).map((id) => {
         const p = parts[id];
@@ -80,7 +81,7 @@ export function resultEvent({ filename, sessionId, snapshot, prefs, arrangements
             fullCombo: hits > 0 && misses === 0 && overhits === 0,
             proDrums: info.instrument === 'drums' && proDrums[id] === true,
             failed: p.failed === true || num(p.drops, 0) > 0,
-            sections: [],
+            sections: (Array.isArray(sections && sections[id]) ? sections[id] : []).map((x) => ({ ...x })),
         };
     });
     return {
