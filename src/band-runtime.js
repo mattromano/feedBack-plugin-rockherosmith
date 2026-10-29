@@ -168,6 +168,8 @@ export function createBandRuntime({
     // a started session drops a pending adopt (its generation moves on).
     let sessionCount = 0;
     let adoptGen = 0;
+    // The screen a solo session was left to mid-song: the Solo screen opens once it shows.
+    let soloReturn = null;
     // Per-session runtime data the pure reducer does not hold.
     let session = null;
     let stage = null;
@@ -320,6 +322,9 @@ export function createBandRuntime({
             partSheet: null,
             pauseToken: null,
             ndQuiet: null,
+            // How a leave was asked for: 'solo' (held Back, to the Solo screen) or
+            // 'nav' (a sidebar link), so the screen change isn't redirected again.
+            leaveTarget: null,
         };
     }
 
@@ -377,7 +382,7 @@ export function createBandRuntime({
         },
         onBackHold: (s) => {
             if (s.overlay && typeof s.overlay.answer === 'function') { s.overlay.answer(true); return; }
-            confirmLeave(s, () => { if (typeof win.showScreen === 'function') safe(() => win.showScreen(BAND_SCREEN)); });
+            confirmLeave(s, () => leaveSong(s));
         },
         // An overhit while paused is a stray pad tap on a pinned drum lane (R10).
         onJudgment: (s, id, type) => {
@@ -1150,7 +1155,19 @@ export function createBandRuntime({
         if (s.sidebar) s.sidebar.close();
         if (scoring() !== s) return;
         if (key === 'settings') openSettings(s);
-        else confirmLeave(s, () => { if (s.sidebar) s.sidebar.follow(link); });
+        // The user picked where to go: a solo session isn't sent to the Solo screen.
+        else confirmLeave(s, () => { s.leaveTarget = 'nav'; if (s.sidebar) s.sidebar.follow(link); });
+    }
+
+    // Leave (held Back): a solo or adopted session goes to the Solo screen through
+    // its hook, which leaves the player; a band session goes to band setup.
+    function leaveSong(s) {
+        if (s.solo && typeof onShowSoloScreen === 'function') {
+            s.leaveTarget = 'solo';
+            safe(() => onShowSoloScreen({ next: false }));
+            return;
+        }
+        if (typeof win.showScreen === 'function') safe(() => win.showScreen(BAND_SCREEN));
     }
 
     function openSettings(s) {
@@ -1794,7 +1811,23 @@ export function createBandRuntime({
         'song:stop': () => { adoptGen++; dispatch({ type: 'left' }); },
         'screen:changing': (e) => {
             const d = (e && e.detail) || {};
-            if (d.from === 'player' && d.id !== 'player') { adoptGen++; dispatch({ type: 'left' }); }
+            if (d.from === 'player' && d.id !== 'player') {
+                // A solo or adopted session left mid-song (core's Esc or End song, to its
+                // return screen): the Solo screen once that screen shows. Not when the
+                // leave already went there or the user picked a sidebar link.
+                const s = session;
+                soloReturn = s && s.solo && !s.leaveTarget && typeof onShowSoloScreen === 'function'
+                    && (state.phase === 'playing' || state.phase === 'armed') ? d.id : null;
+                adoptGen++;
+                dispatch({ type: 'left' });
+            }
+        },
+        'screen:changed': (e) => {
+            const d = (e && e.detail) || {};
+            if (!soloReturn || d.id === 'player') return;
+            const hit = d.id === soloReturn;
+            soloReturn = null;
+            if (hit) safe(() => onShowSoloScreen({ next: false }));
         },
         // A 5-fret lane's quick settings change on this session's lane (A4): the
         // caller saves it (a band controller's entry, or the Solo choices).

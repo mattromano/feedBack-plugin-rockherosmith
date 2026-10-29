@@ -5389,3 +5389,89 @@ test('the results close the sheet without a resume', () => {
     assert.deepEqual(env.calls.resume, []);
     env.rt.dispose();
 });
+
+// ---- Leaving a solo or adopted session mid-song goes to the Solo screen ----
+
+// Core's showScreen: screen:changing, then screen:changed (as session.js / shell do).
+const coreShow = (fb, id, from = 'player') => {
+    fb.emit('screen:changing', { id, from });
+    fb.emit('screen:changed', { id, from });
+};
+
+test('leaving a playSolo session mid-song (Esc, End song) opens the Solo screen, not band setup', () => {
+    const { env, shown } = adoptEnv();
+    const { rt, loadSong, fb } = env;
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    coreShow(fb, 'plugin-rockherosmith');   // core's exit to the return screen
+    assert.equal(rt.phase(), 'idle');
+    assert.deepEqual(shown, [{ next: false }]);
+    // Only once: a later visit to the band screen is the user's.
+    coreShow(fb, 'plugin-rockherosmith', 'v3-home');
+    assert.equal(shown.length, 1);
+    rt.dispose();
+});
+
+test('an adopted play left mid-song goes to the Solo screen wherever core returns', async () => {
+    const { env, shown } = adoptEnv();
+    const { rt, loadSong, fb } = env;
+    loadSong(DRUM_ITEM);
+    await flush();
+    assert.equal(rt.phase(), 'playing');
+    coreShow(fb, 'v3-songs');
+    assert.deepEqual(shown, [{ next: false }]);
+    rt.dispose();
+});
+
+test('a held Back leave in a solo session goes to the Solo screen; in a band, to band setup', async () => {
+    const { env, shown } = adoptEnv();
+    const { rt, fb, mounts, calls, prompts } = env;
+    rt.startSession({ song: DRUM_ITEM, prefs: padPrefs([KIT1], noRealDrums), solo: true });
+    await flush();
+    env.loadSong(DRUM_ITEM);
+    const canvas = mounts[0].ctlCanvas.ctl1;
+    fb.emit('drums:band-back-hold', { controllerKey: 'Kit#1', canvas });
+    assert.equal(prompts.length, 1);
+    prompts[0].resolve(true);
+    await flush();
+    assert.deepEqual(shown, [{ next: false }], 'the Solo screen');
+    assert.deepEqual(calls.showScreen, [], 'never band setup');
+    // Core then leaves the player for it: not opened a second time.
+    coreShow(fb, 'plugin-rockherosmith-solo');
+    assert.equal(shown.length, 1);
+    assert.equal(rt.phase(), 'idle');
+    rt.dispose();
+    // A solo session without the hook: band setup, as before.
+    const b = setup();
+    b.rt.startSession({ song: DRUM_ITEM, prefs: padPrefs([KIT1], noRealDrums), solo: true });
+    await flush();
+    b.loadSong(DRUM_ITEM);
+    b.fb.emit('drums:band-back-hold', { controllerKey: 'Kit#1', canvas: b.mounts[0].ctlCanvas.ctl1 });
+    b.prompts[0].resolve(true);
+    await flush();
+    assert.deepEqual(b.calls.showScreen, ['plugin-rockherosmith']);
+    b.rt.dispose();
+});
+
+test('band sessions still return to the band screen; a sidebar link is followed, not redirected', async () => {
+    const { env, shown } = adoptEnv();
+    const { rt, loadSong, fb } = env;
+    rt.startSession({ song: ITEM, prefs: prefsWith() });
+    loadSong(ITEM);
+    coreShow(fb, 'plugin-rockherosmith');
+    assert.deepEqual(shown, [], 'a band session: no Solo screen');
+    rt.dispose();
+    const b = adoptEnv();
+    b.env.rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    b.env.loadSong(DRUM_ITEM);
+    // The sidebar's Songs link, answered Leave: the user goes to Songs.
+    b.env.keyWin('KeyM', 'm');
+    b.env.navLinks.songs.click = () => coreShow(b.env.fb, 'v3-songs');
+    b.env.sidebar.fire('click', { target: b.env.navLinks.songs, preventDefault() {}, stopPropagation() {} });
+    assert.equal(b.env.prompts.length, 1);
+    b.env.prompts[0].resolve(true);
+    await flush();
+    assert.equal(b.env.rt.phase(), 'idle');
+    assert.deepEqual(b.shown, [], 'followed to Songs, no Solo screen');
+    b.env.rt.dispose();
+});
