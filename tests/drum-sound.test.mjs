@@ -1,7 +1,7 @@
 // Drum sound modes (plan 6 R2, R16): a pure state machine, nothing plays.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createDrumSound, dropoutStep } from '../src/drum-sound.js';
+import { createDrumSound, dropoutStep, DRUM_SOUND_MODES, DRUM_SOUND_MODE_LABELS, padsMuted } from '../src/drum-sound.js';
 
 test('song drums never mute', () => {
     const d = createDrumSound('song');
@@ -58,4 +58,19 @@ test('dropoutStep: the drop-out rule the stem sound shares', () => {
         assert.equal(dropoutStep(true, kind), true, String(kind));
         assert.equal(dropoutStep(false, kind), false, String(kind));
     }
+});
+
+// Play layer contract §6: the labels, and when the pads go silent.
+test('DRUM_SOUND_MODE_LABELS: one label per mode id', () => {
+    assert.deepEqual(DRUM_SOUND_MODE_LABELS, { rockband: 'Rock Band', song: 'Song + pads', kit: 'Kit only' });
+    for (const id of DRUM_SOUND_MODES) assert.equal(typeof DRUM_SOUND_MODE_LABELS[id], 'string');
+});
+
+test('padsMuted: only when every drums player plays Rock Band', () => {
+    assert.equal(padsMuted(['rockband']), true);
+    assert.equal(padsMuted(['rockband', 'rockband']), true);
+    assert.equal(padsMuted(['rockband', 'song']), false);
+    assert.equal(padsMuted(['kit']), false);
+    assert.equal(padsMuted([]), false);
+    assert.equal(padsMuted(null), false);
 });
