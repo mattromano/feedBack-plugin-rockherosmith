@@ -6,6 +6,7 @@ Play a song as a band from Home or the Song Library: Setup, Confirm, then the li
 ## Ways in
 
 - **Play RockHeroSmith** on Home opens band Setup.
+- **Play solo** on Home (and on Band setup) opens the Solo screen.
 - **Start** on any free controller from Home, the Song Library or Settings opens Setup with
   that controller joined.
 - The **RockHeroSmith** button on band-ready Song Library cards (a real guitar part plus a
@@ -19,6 +20,26 @@ None of these does anything while a band song is playing.
 - **Picking a song.** Band setup → **Choose a song** opens the Song Library in pick mode
   (band chips, click to select, **Use this song**) → Confirm (parts, difficulty, devices,
   drum sound) → GO. Next song goes back to the library.
+
+## Solo
+
+The Solo screen is for playing alone: a band of one on the RockHeroSmith stage.
+
+- **Instrument:** Drums (kit) on the Drums plugin's MIDI input, a drum controller, a 5-fret
+  controller (Lead / Rhythm / Bass), or real guitar (Lead / Rhythm / Bass arrangement). Pick a
+  difficulty, and for drums the drum sound.
+- **Songs:** the library, filtered to songs with that part (a drum chart, the 5-fret part, or the
+  arrangement), with a search box. **Browse library** opens the Song Library in pick mode with
+  the same filter.
+- **Click a song, or Enter / A:** it plays straight away on that chart. Drums and controllers
+  play on the RockHeroSmith stage (`playSolo`); real guitar plays as a normal song on that
+  arrangement.
+- If the instrument isn't there (no MIDI kit, no controller), the screen says so and offers
+  the Drums or 5-Fret controls.
+- **Options:** the crowd meter on or off, failing, and **Next song** (back to the list, or play
+  the next song in it).
+- Every choice is remembered (`prefs.solo`). Results' **Next song** after a solo song comes
+  back here.
 
 ## Playing on a controller
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { soloPrefs, pickSoloController, createSoloPlay, soloKindFor, createOpenSolo, adoptTarget, createAdopt, quickSettingPatch, currentViz } from '../src/solo.js';
+import { soloPrefs, pickSoloController, createSoloPlay, soloKindFor, soloShowsCrowd, adoptTarget, createAdopt, quickSettingPatch, currentViz } from '../src/solo.js';
 import { normalizePrefs } from '../src/prefs.js';
 
 const KEY = 'Xbox#1';
@@ -203,12 +203,16 @@ test('soloKindFor and kit playSolo wait for the drums MIDI discovery', async () 
     assert.equal(calls[0][1].prefs.parts.drums.deviceKey, 'TD-17');
 });
 
-test('openSolo (stub until the Solo screen): the band screen, its song pick on next', () => {
-    const calls = [];
-    const open = createOpenSolo({ getScreen: () => ({ nextSong: () => calls.push('nextSong') }), showScreen: (id) => calls.push(id) });
-    open();
-    open({ next: true });
-    assert.deepEqual(calls, ['plugin-rockherosmith', 'plugin-rockherosmith', 'nextSong']);
+test('soloShowsCrowd: the crowd meter shows in a band, and in a solo unless the Solo screen turned it off', () => {
+    assert.equal(soloShowsCrowd(normalizePrefs({ solo: { crowd: false } }), false), true, 'band');
+    assert.equal(soloShowsCrowd(normalizePrefs({ solo: { crowd: false } }), true), false);
+    assert.equal(soloShowsCrowd(normalizePrefs({}), true), true);
+    assert.equal(soloShowsCrowd(null, true), true);
+});
+
+test('a solo session plays with the Solo screen fail mode', () => {
+    const p = soloPrefs(normalizePrefs({ failMode: 'nofail', solo: { failMode: 'fail' } }), { kind: 'kit' });
+    assert.equal(p.failMode, 'fail');
 });
 
 // Adopt: what a plain play on the drum or 5-fret view becomes.

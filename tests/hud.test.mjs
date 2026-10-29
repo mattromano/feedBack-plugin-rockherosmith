@@ -396,3 +396,20 @@ test('drums controller streak callouts every 50', () => {
     assert.equal(partHud('ctl1').querySelector('.rhs-callout').textContent, '');
     hud.destroy();
 });
+
+test('crowd: false builds no crowd meter (a solo with the crowd meter off), and updates still run', () => {
+    const doc = makeDoc();
+    const player = makeEl('div', doc);
+    doc.body.appendChild(player);
+    const slot = makeEl('div', doc);
+    player.appendChild(slot);
+    const stage = { laneSlot: (p) => (p === 'drums' ? slot : null), stripSlot: null };
+    const hud = createBandHud({ doc, player, stage, parts: ['drums'], prefs: PREFS, song: {}, crowd: false });
+    assert.equal(player.querySelectorAll('.rhs-crowd').length, 0);
+    hud.update(snap({}, { drums: { crowd: 0.1, multiplier: 2 } }));
+    assert.equal(player.querySelector('.rhs-mult').textContent, '×2');
+    hud.destroy();
+    const withCrowd = createBandHud({ doc, player, stage, parts: ['drums'], prefs: PREFS, song: {} });
+    assert.equal(player.querySelectorAll('.rhs-crowd').length, 1, 'shown by default');
+    withCrowd.destroy();
+});

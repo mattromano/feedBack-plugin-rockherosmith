@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MODE_ID, isBandReady, bandIsSetUp, registerMainMode } from '../src/main-mode.js';
-import { renderHeroArt } from '../src/hero-art.js';
+import { makeDoc, makeEl } from './fake-dom.mjs';
 import { normalizePrefs } from '../src/prefs.js';
 
 test('MODE_ID is the plugin id', () => {
@@ -73,6 +73,7 @@ function fakeWin({ phase = 'idle', onScreen = false, noRegister = false, cardAct
     const dispose = registerMainMode({
         win, getScreen: () => screen, getRuntime: () => runtime,
         showScreen: (id) => calls.push(['showScreen', id]),
+        openSolo: () => calls.push(['openSolo']),
     });
     const fire = (detail) => { for (const [t, f] of listeners) if (t === 'gamepad:start-pressed') f({ detail }); };
     return { win, calls, specs, listeners, dispose, fire, unregisters: () => unregisters };
@@ -87,7 +88,7 @@ test('registerMainMode registers one mode with the spec values', () => {
     assert.equal(s.startLabel, 'Play RockHeroSmith');
     assert.equal(s.order, 10);
     assert.equal(s.startPress, true);
-    assert.equal(s.renderHero, renderHeroArt);
+    assert.equal(typeof s.renderHero, 'function');
     assert.equal(typeof s.start, 'function');
     assert.deepEqual(s.tour, {
         title: 'Play RockHeroSmith',
@@ -195,4 +196,31 @@ test('registerMainMode: the Play as entry is disabled while a session runs', () 
     const acts = [];
     fakeWin({ phase: 'playing', cardActions: { register(spec) { acts.push(spec); return () => {}; } } });
     assert.equal(acts[0].enabled(), false);
+});
+
+test('registerMainMode: the Home hero has the art and a Play solo button that opens the Solo screen', () => {
+    const { specs, calls } = fakeWin();
+    calls.length = 0;
+    const doc = makeDoc();
+    const el = makeEl('div', doc);
+    specs[0].renderHero(el);
+    assert.match(el.innerHTML, /rhs-wordmark/, 'the art');
+    const solo = el.querySelector('.rhs-hero-solo');
+    assert.ok(solo, 'the Solo button');
+    assert.equal(solo.textContent, 'Play solo');
+    solo.click();
+    assert.deepEqual(calls, [['openSolo']]);
+    specs[0].renderHero(el);
+    assert.equal(el.querySelectorAll('.rhs-hero-solo').length, 1, 'a re-render keeps one button');
+    specs[0].renderHero(null);
+});
+
+test('registerMainMode: Play solo does nothing while a session runs', () => {
+    const { specs, calls } = fakeWin({ phase: 'playing' });
+    calls.length = 0;
+    const doc = makeDoc();
+    const el = makeEl('div', doc);
+    specs[0].renderHero(el);
+    el.querySelector('.rhs-hero-solo').click();
+    assert.deepEqual(calls, []);
 });
