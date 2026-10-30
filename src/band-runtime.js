@@ -1234,12 +1234,17 @@ export function createBandRuntime({
             // open, not toggle: the click lands after the sidebar's own
             // outside-pointerdown close, so a toggle would fight it.
             onMenu: () => openSidebar('menu'),
-            onEdge: () => openSidebar('edge'),
+            onPart: () => openPart(s),
             onLoop: () => cycleLoop(s),
             onFullScreen: () => setFull(s, !s.full),
             onEnd: () => { if (typeof win.requestExitSong === 'function') safe(() => win.requestExitSong()); },
         })) || null;
-        if (s.chrome) { const c = s.chrome; const st = loopState(); safe(() => c.setLoop(st)); }
+        if (s.chrome) {
+            const c = s.chrome;
+            const st = loopState();
+            const part = hasPartSheet(s);
+            safe(() => { c.setLoop(st); c.setPart(part); });
+        }
         if (!s.sidebar) {
             s.sidebar = safe(() => createSidebarOverlay({
                 doc, onNavigate: (link, key) => onSidebarNav(s, link, key),

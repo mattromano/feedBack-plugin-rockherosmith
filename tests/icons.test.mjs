@@ -25,12 +25,12 @@ test('unknown icon is empty', () => {
 });
 
 test('seventeen icons', () => {
-    assert.equal(ICON_NAMES.length, 17);
+    assert.equal(ICON_NAMES.length, 18);
     for (const n of ICON_NAMES) assert.ok(icon(n).includes('</svg>'), n);
 });
 
 test('the stage chrome icons (plan 7 R23)', () => {
-    for (const n of ['menu', 'maximize', 'minimize', 'repeat', 'log-out']) assert.ok(ICON_NAMES.includes(n), n);
+    for (const n of ['menu', 'sliders-horizontal', 'maximize', 'minimize', 'repeat', 'log-out']) assert.ok(ICON_NAMES.includes(n), n);
     assert.ok(icon('log-out').includes('<line x1="21" x2="9" y1="12" y2="12"/>'));
 });
 

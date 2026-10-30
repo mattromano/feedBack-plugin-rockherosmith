@@ -336,25 +336,15 @@
 #player .rhs-chrome button:hover { background: rgba(40, 40, 56, 0.9); color: #fff; }
 #player .rhs-chrome button[aria-pressed="true"] { color: #fff; }
 #player .rhs-chrome-icon { display: inline-flex; }
+#player .rhs-chrome button[hidden] { display: none; }
 #player .rhs-chrome .rhs-chrome-end { margin-left: auto; }
-/* Full mode (R2, R6): no tool rail, the lanes run to the bottom and the
-   transport overlays them on hover. */
-#player.rhs-full #v3-railzone { display: none; }
+/* Full mode (R2, R6): the lanes run to the bottom and the transport overlays
+   them on hover. Core's tool rail (plugin controls, mixer, stems) stays: it
+   reveals from the left edge as it does windowed. */
 #player.rhs-full .rhs-lanes { bottom: 0 !important; }
 #player.rhs-full .v3-transport {
     background: linear-gradient(to top, rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0));
 }
-/* Full mode's left edge opens the sidebar (R7); windowed, it stays core's rail. */
-#player .rhs-edge {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 10px;
-    z-index: 31;
-    display: none;
-}
-#player.rhs-full .rhs-edge { display: block; }
 /* Lane chrome lifts above the stacked hover chrome (R6). */
 #player.rhs-stage .rhs-lane-chrome { bottom: calc(60px + 0.75rem); }
 #player.rhs-stage.rhs-full .rhs-lane-chrome { bottom: calc(var(--rhs-transport-h, 72px) + 60px + 0.75rem); }
