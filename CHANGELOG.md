@@ -5,6 +5,7 @@
 ### Changed
 - **Solo shows the lane's own HUD.** A solo or adopted drums / 5-Fret song keeps the lane's multiplier ring, note streak, score pops, combo rings, full combo, early / late and star power meter (`setScoreHudHidden(canvas, false)`); the band bar shrinks to the song and stars, with the crowd meter when it is on (no duplicate score, no BAND ×N, no band bonus). Needs a Drums / 5-Fret plugin with `hudModes()`; with an older one nothing changes.
 - **Band lanes keep their streak HUD.** In a band, a lane whose plugin supports `hudModes()` → `['score']` hides only its own score, stars and accuracy (`setScoreHudHidden(canvas, 'score')`); the band bar keeps the band score. Teardown shows every lane's HUD again.
+- **Scorecard stays up** when `feedBackScorecard.instruments()` covers every local non-vocal player's instrument (solo or band); otherwise it is hidden as before.
 
 ### Added
 - `play:judgment` carries `offsetMs` (hit minus note, ms; null off a hit), `timing` (`'early'` / `'late'` / `'on'` within ±20 ms or the event's own perfect window), `canvas` (the player's lane) and `local: true`.

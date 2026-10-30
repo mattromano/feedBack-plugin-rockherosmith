@@ -6095,3 +6095,47 @@ test('play:rewind on a backward seek and a loop wrap; never on a forward or tiny
     assert.deepEqual(got.slice(1), [['play:rewind', { sessionId: id, t: 15 }], ['play:rewind', { sessionId: id, t: 10 }]]);
     rt.dispose();
 });
+
+// ---- C1 follow-up: a Scorecard that covers every local instrument keeps its HUD ----
+const scHides = (calls) => calls.hides.filter((h) => h[0] === 'scorecard');
+
+test('Scorecard covering every local non-vocal instrument is never hidden (solo and band)', async () => {
+    const solo = setup();
+    solo.win.feedBackScorecard.instruments = () => ['guitar', 'drums', 'five_fret'];
+    solo.rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    solo.loadSong(DRUM_ITEM);
+    assert.deepEqual(scHides(solo.calls), []);
+    solo.rt.dispose();
+    assert.deepEqual(scHides(solo.calls), [], 'nothing to restore either');
+
+    // A band of drums + 5-fret (+ vocals, which never count).
+    const band = setup();
+    band.win.feedBackScorecard.instruments = () => ['drums', 'five_fret'];
+    await goCtl(band, ctlPrefs([PAD1], { guitar: { on: false }, vocals: { on: true } }));
+    assert.equal(band.rt.phase(), 'playing');
+    assert.deepEqual(scHides(band.calls), []);
+    band.rt.dispose();
+});
+
+test('Scorecard missing an instrument, or without instruments(), is hidden as before and restored', async () => {
+    const partial = setup();
+    partial.win.feedBackScorecard.instruments = () => ['guitar', 'drums'];
+    await goCtl(partial, ctlPrefs([PAD1], { guitar: { on: false } }));
+    assert.deepEqual(scHides(partial.calls), [['scorecard', true]], 'five_fret not covered');
+    partial.fb.emit('song:stop', {});
+    assert.deepEqual(scHides(partial.calls), [['scorecard', true], ['scorecard', false]]);
+    partial.rt.dispose();
+
+    const broken = setup();
+    broken.win.feedBackScorecard.instruments = () => { throw new Error('boom'); };
+    broken.rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    broken.loadSong(DRUM_ITEM);
+    assert.deepEqual(scHides(broken.calls), [['scorecard', true]]);
+    broken.rt.dispose();
+
+    const old = setup();
+    old.rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    old.loadSong(DRUM_ITEM);
+    assert.deepEqual(scHides(old.calls), [['scorecard', true]]);
+    old.rt.dispose();
+});

@@ -129,6 +129,10 @@ and report `hudModes() -> ['score']`. RockHeroSmith gives a lane:
 Teardown sets `false` on every lane it touched. The plugins' `adoptsSolo` gate no longer hides
 their HUD (only their end card and local best).
 
+Scorecard: RockHeroSmith calls `feedBackScorecard.setHudHidden(true)` for a session unless
+`feedBackScorecard.instruments()` exists and lists the instrument of every local non-vocal
+player (`'guitar'` | `'drums'` | `'five_fret'`), solo or band.
+
 ## 4. Drums plugin (`window.feedBackDrums`, additive)
 
 ```js

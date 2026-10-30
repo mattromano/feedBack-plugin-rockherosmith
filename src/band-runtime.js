@@ -473,10 +473,21 @@ export function createBandRuntime({
         // A controller lane's replaced canvas gets its score HUD hidden again.
         if (s.ctlCanvas.size) listenCanvas(s);
         const sc = win.feedBackScorecard;
-        if (!s.hidden.scorecard && sc && typeof sc.setHudHidden === 'function') {
+        if (!s.hidden.scorecard && sc && typeof sc.setHudHidden === 'function' && !scorecardCovers(s, sc)) {
             s.hidden.scorecard = true;
             safe(() => sc.setHudHidden(true));
         }
+    }
+
+    // A Scorecard that scores every local non-vocal player's instrument
+    // (feedBackScorecard.instruments()) keeps its HUD, solo or band (C1).
+    function scorecardCovers(s, sc) {
+        if (typeof sc.instruments !== 'function') return false;
+        const list = safe(() => sc.instruments());
+        if (!Array.isArray(list)) return false;
+        const needed = (s.scoreParts || []).filter((id) => id !== 'vocals')
+            .map((id) => playerInfo(id, s.prefs).instrument);
+        return needed.length > 0 && needed.every((inst) => typeof inst === 'string' && list.includes(inst));
     }
 
     function undoHides(s) {
