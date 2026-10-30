@@ -27,10 +27,12 @@ export function kindOf(kinds, prefs, c) {
 //   displayTime(s), record(s, entry): the runtime's clock and ledger
 //   onDeploy(s, id), onPause(s), onBackHold(s): a live lane's sp-activate, Start and held Back
 //   onJudgment(s, id, type): a live lane's judgment, after its ledger entry (part audio)
-// -> { lanePlayer, refreshLanes, laneOwner, adoptReplaced, laneState, readConnected, teardown, events, onEvent }
+//   hudMode(s, api): what a lane's setScoreHudHidden gets (true | false | 'score'); default true
+//   record(s, entry, detail) gets the lane event's detail too (play:judgment timing)
+// -> { lanePlayer, laneApiOf, refreshLanes, laneOwner, adoptReplaced, laneState, readConnected, teardown, events, onEvent }
 //   events: [{ name, type }], one per bus event name across every kind
 export function createControllerLanes({
-    kinds, getStage, realDrumCanvas, getSession, isLive, displayTime, record, onDeploy, onPause, onBackHold, onJudgment,
+    kinds, getStage, realDrumCanvas, getSession, isLive, displayTime, record, onDeploy, onPause, onBackHold, onJudgment, hudMode,
 }) {
     const laneCanvasOf = (id) => {
         const stage = getStage();
@@ -103,7 +105,8 @@ export function createControllerLanes({
         const api = laneApi(p);
         if (!api || typeof api.setScoreHudHidden !== 'function') return;
         s.hidden.ctl.set(canvas, api);
-        safe(() => api.setScoreHudHidden(canvas, true));
+        const mode = typeof hudMode === 'function' ? safe(() => hudMode(s, api)) : true;
+        safe(() => api.setScoreHudHidden(canvas, mode === undefined ? true : mode));
     }
 
     // After the stage unmounts: the lanes' score HUDs come back (their canvases
@@ -200,7 +203,7 @@ export function createControllerLanes({
         }
         if (entry) {
             syncLaneThresholds(s, id, p);
-            record(s, entry);
+            record(s, entry, d);
         }
         if (live && typeof onJudgment === 'function') onJudgment(s, id, type);
     }
@@ -218,5 +221,8 @@ export function createControllerLanes({
         }
     }
 
-    return { lanePlayer, refreshLanes, laneOwner, adoptReplaced, laneState, readConnected, teardown, events, onEvent };
+    // A controller player's plugin API (its kind's), or null.
+    const laneApiOf = (s, id) => laneApi(lanePlayer(s, id));
+
+    return { lanePlayer, laneApiOf, refreshLanes, laneOwner, adoptReplaced, laneState, readConnected, teardown, events, onEvent };
 }

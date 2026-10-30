@@ -527,6 +527,10 @@ body.rhs-band-song #count-in-overlay { display: none !important; }
 #player .rhs-hud-mult.rhs-hot { color: #5cc8ff; text-shadow: 0 0 10px #5cc8ff88; }
 #player .rhs-hud-bonus { font: 500 10px/1 'Unbounded', system-ui, sans-serif; color: #5cc8ff; }
 #player .rhs-hud-bonus:empty { display: none; }
+/* Solo with the lane's own HUD (C1): song and stars only, the song first and brighter;
+   the bar keeps its 48 px so the stage under it does not move. */
+#player .rhs-hud.rhs-hud-slim { gap: 16px; }
+#player .rhs-hud.rhs-hud-slim .rhs-hud-song { order: -1; color: #c9c8d6; font-size: 13px; }
 
 #player .rhs-part-hud { position: absolute; inset: 0; z-index: 1; pointer-events: none; color: #ecebf2; }
 #player .rhs-lanehud {

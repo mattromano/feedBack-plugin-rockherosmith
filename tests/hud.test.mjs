@@ -413,3 +413,46 @@ test('crowd: false builds no crowd meter (a solo with the crowd meter off), and 
     assert.equal(player.querySelectorAll('.rhs-crowd').length, 1, 'shown by default');
     withCrowd.destroy();
 });
+
+test('slim (a solo whose lane shows its own HUD): the bar keeps song and stars only; the lane overlay keeps the crowd meter', () => {
+    const doc = makeDoc();
+    const player = makeEl('div', doc);
+    doc.body.appendChild(player);
+    const slot = makeEl('div', doc);
+    player.appendChild(slot);
+    const stage = { laneSlot: (p) => (p === 'drums' ? slot : null), stripSlot: null };
+    const hud = createBandHud({ doc, player, stage, parts: ['drums'], prefs: PREFS, song: { title: 'Holiday', artist: 'Green Day' }, slim: true });
+    const bar = player.querySelector('.rhs-hud');
+    assert.ok(bar.classList.contains('rhs-hud-slim'));
+    assert.equal(player.querySelector('.rhs-hud-song').textContent, 'Holiday · Green Day');
+    assert.equal(player.querySelectorAll('.rhs-hud-stars').length, 1);
+    // No duplicate score, no BAND ×N, no band bonus: the lane draws its own score and streak.
+    for (const cls of ['.rhs-hud-score', '.rhs-hud-band', '.rhs-hud-mult', '.rhs-hud-bonus']) {
+        assert.equal(player.querySelector(cls), null, cls);
+    }
+    // The lane overlay: the crowd meter only (the lane has its own multiplier, star power and streak pops).
+    const lane = player.querySelector('.rhs-part-hud');
+    assert.ok(lane && lane.parentNode === slot);
+    assert.equal(player.querySelectorAll('.rhs-crowd').length, 1);
+    for (const cls of ['.rhs-lanehud', '.rhs-mult', '.rhs-od', '.rhs-tag', '.rhs-callout', '.rhs-glow']) {
+        assert.equal(lane.querySelector(cls), null, cls);
+    }
+    // Every update / call still runs.
+    hud.update(snap({ score: 1234, stars: 3.5, bonus: 50, bandMultiplier: 2 }, { drums: { crowd: 0.1, streak: 0 } }));
+    hud.update(snap({ score: 1300, stars: 3.6 }, { drums: { crowd: 0.9, streak: 60 } }));
+    assert.equal(player.querySelector('.rhs-crowd').children[0].style.bottom, '90%');
+    hud.callout('drums', 'Hot!');
+    hud.setOverdrive('drums', 0.5, true);
+    hud.setReady('drums', true);
+    hud.setFailed('drums', true);
+    assert.ok(slot.classList.contains('rhs-failed'));
+    hud.destroy();
+    assert.equal(player.querySelector('.rhs-hud'), null);
+    assert.equal(slot.classList.contains('rhs-failed'), false);
+    // Slim with the crowd meter off: no lane overlay at all.
+    const bare = createBandHud({ doc, player, stage, parts: ['drums'], prefs: PREFS, song: {}, slim: true, crowd: false });
+    assert.equal(player.querySelectorAll('.rhs-part-hud').length, 0);
+    bare.update(snap());
+    bare.setFailed('drums', true);
+    bare.destroy();
+});

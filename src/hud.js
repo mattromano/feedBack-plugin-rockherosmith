@@ -25,7 +25,10 @@ function restart(el, cls) {
 const pct = (v) => Math.round(v * 100) + '%';
 
 // crowd: false leaves the crowd meters out (a solo with the Solo screen's crowd meter off).
-export function createBandHud({ doc, player, stage, parts, prefs, song, oneLevel, crowd: showCrowd = true }) {
+// slim: a solo whose lane shows its own HUD (score, streak, multiplier, star power): the
+// bar keeps the song and stars only (no score, no BAND ×N, no band bonus), and the lane
+// overlay only the crowd meter (none when the crowd is off).
+export function createBandHud({ doc, player, stage, parts, prefs, song, oneLevel, crowd: showCrowd = true, slim = false }) {
     const el = (tag, cls, parent) => {
         const e = doc.createElement(tag);
         if (cls) e.className = cls;
@@ -45,9 +48,9 @@ export function createBandHud({ doc, player, stage, parts, prefs, song, oneLevel
     const flag = (node, cls, on) => put(node, cls, on, (v) => { node.classList.toggle(cls, v); });
 
     // ── The bar ──
-    const bar = el('div', 'rhs-hud');
-    const scoreEl = el('span', 'rhs-hud-score', bar);
-    scoreEl.textContent = '0';
+    const bar = el('div', slim ? 'rhs-hud rhs-hud-slim' : 'rhs-hud');
+    const scoreEl = slim ? null : el('span', 'rhs-hud-score', bar);
+    if (scoreEl) scoreEl.textContent = '0';
     const starsEl = el('span', 'rhs-hud-stars', bar);
     starsEl.setAttribute('aria-hidden', 'true');
     const fills = [];
@@ -62,10 +65,10 @@ export function createBandHud({ doc, player, stage, parts, prefs, song, oneLevel
     const songEl = el('span', 'rhs-hud-song', bar);
     const s = song || {};
     songEl.textContent = [s.title, s.artist].filter((v) => typeof v === 'string' && v).join(' · ');
-    const band = el('div', 'rhs-hud-band', bar);
-    const multEl = el('span', 'rhs-hud-mult', band);
-    multEl.textContent = bandMultiplierText(1);
-    const bonusEl = el('span', 'rhs-hud-bonus', band);
+    const band = slim ? null : el('div', 'rhs-hud-band', bar);
+    const multEl = band && el('span', 'rhs-hud-mult', band);
+    if (multEl) multEl.textContent = bandMultiplierText(1);
+    const bonusEl = band && el('span', 'rhs-hud-bonus', band);
     player.appendChild(bar);
 
     // ── Each part ──
@@ -73,6 +76,18 @@ export function createBandHud({ doc, player, stage, parts, prefs, song, oneLevel
     for (const part of Array.isArray(parts) ? parts : []) {
         const host = part === 'vocals' ? stage && stage.stripSlot : stage && stage.laneSlot && stage.laneSlot(part);
         if (!host || huds.has(part)) continue;
+        // Slim: the lane draws its own tag-free HUD; only the crowd meter is the band's.
+        if (slim) {
+            if (!showCrowd) { huds.set(part, { slim: true, host }); continue; }
+            const root = el('div', 'rhs-part-hud rhs-part-hud-slim');
+            root.setAttribute('data-part', part);
+            const marker = el('i', '', el('div', 'rhs-crowd', root));
+            marker.style.bottom = pct(CROWD.start);
+            marker.classList.add('rhs-crowd-' + crowdZone(CROWD.start));
+            host.appendChild(root);
+            huds.set(part, { slim: true, root, host, marker });
+            continue;
+        }
         const ctl = ((prefs && prefs.controllers) || []).find((c) => c && c.id === part);
         const style = playerStyle(part, prefs, { oneLevel, sourceKind: ctl && ctl.sourceKind });
         const root = el('div', 'rhs-part-hud');
@@ -113,22 +128,33 @@ export function createBandHud({ doc, player, stage, parts, prefs, song, oneLevel
     function update(snapshot, opts) {
         if (!alive || !snapshot) return;
         const silent = !!(opts && opts.silent);
-        text(scoreEl, formatScore(snapshot.score));
+        if (scoreEl) text(scoreEl, formatScore(snapshot.score));
         const { full, partial, gold } = starDisplay(snapshot.stars);
         fills.forEach((fill, i) => {
             const share = i < full ? 1 : i === full ? partial : 0;
             put(fill, 'width', pct(share), (v) => { fill.style.width = v; });
         });
         flag(starsEl, 'rhs-gold', gold);
-        const n = Number.isFinite(snapshot.bandMultiplier) ? snapshot.bandMultiplier : 1;
-        text(multEl, bandMultiplierText(n));
-        flag(multEl, 'rhs-hot', n >= 2);
-        text(bonusEl, snapshot.bonus > 0 ? '+' + formatScore(snapshot.bonus) + ' bonus' : '');
+        if (band) {
+            const n = Number.isFinite(snapshot.bandMultiplier) ? snapshot.bandMultiplier : 1;
+            text(multEl, bandMultiplierText(n));
+            flag(multEl, 'rhs-hot', n >= 2);
+            text(bonusEl, snapshot.bonus > 0 ? '+' + formatScore(snapshot.bonus) + ' bonus' : '');
+        }
 
         const sp = snapshot.parts || {};
         for (const [part, h] of huds) {
             const p = sp[part];
             if (!p) continue;
+            if (h.slim) {
+                if (h.marker) {
+                    const c = Number.isFinite(p.crowd) ? Math.min(1, Math.max(0, p.crowd)) : 0;
+                    put(h.marker, 'bottom', pct(c), (v) => { h.marker.style.bottom = v; });
+                    const zone = crowdZone(c);
+                    for (const z of ZONES) flag(h.marker, 'rhs-crowd-' + z, z === zone);
+                }
+                continue;
+            }
             text(h.mult, '×' + (Number.isFinite(p.multiplier) ? p.multiplier : 1));
             if (h.marker) {
                 const c = Number.isFinite(p.crowd) ? Math.min(1, Math.max(0, p.crowd)) : 0;
@@ -160,12 +186,12 @@ export function createBandHud({ doc, player, stage, parts, prefs, song, oneLevel
         update,
         callout(part, line) {
             const h = alive && huds.get(part);
-            if (h) show(h, String(line));
+            if (h && !h.slim) show(h, String(line));
         },
         // Overdrive meter for a part: fill 0..1 and whether it is deployed. Writes changes only.
         setOverdrive(part, fraction, active) {
             const h = alive && huds.get(part);
-            if (!h) return;
+            if (!h || h.slim) return;
             const f = Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : 0;
             put(h.odFill, 'width', pct(f), (v) => { h.odFill.style.width = v; });
             flag(h.root, 'rhs-od-active', !!active);
@@ -173,18 +199,18 @@ export function createBandHud({ doc, player, stage, parts, prefs, song, oneLevel
         // Enough bar to deploy: the bar pulses.
         setReady(part, on) {
             const h = alive && huds.get(part);
-            if (h) flag(h.root, 'rhs-od-ready', !!on);
+            if (h && !h.slim) flag(h.root, 'rhs-od-ready', !!on);
         },
         // The Noodle it up zone on the guitar lane.
         setNoodle(on) {
             const h = alive && huds.get('guitar');
-            if (h) flag(h.root, 'rhs-noodle', !!on);
+            if (h && !h.slim) flag(h.root, 'rhs-noodle', !!on);
         },
         // Fail mode: the part is out. Greys the lane (or strip) and marks the HUD tag.
         setFailed(part, on) {
             const h = alive && huds.get(part);
             if (!h) return;
-            flag(h.root, 'rhs-failed', !!on);
+            if (h.root) flag(h.root, 'rhs-failed', !!on);
             flag(h.host, 'rhs-failed', !!on);
         },
         destroy() {
@@ -192,7 +218,7 @@ export function createBandHud({ doc, player, stage, parts, prefs, song, oneLevel
             alive = false;
             bar.remove();
             for (const h of huds.values()) {
-                h.root.remove();
+                if (h.root) h.root.remove();
                 h.host.classList.remove('rhs-failed');
             }
             huds.clear();

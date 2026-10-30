@@ -14,7 +14,7 @@ import { PART_TYPES, getPart, hasChart, songFacts } from './parts.js';
 import { karaokeApi, armVocals, startVocals, stopVocals, showKaraokeHud } from './vocals.js';
 import { createBandScore } from './band-score.js';
 import { guitarEntry, drumsEntry, drumsBonusEntry, vocalsEntry, vocalsTotals, onsetTime } from './part-events.js';
-import { playerInfo, judgmentEvent, resultEvent, sessionIdFor } from './play-events.js';
+import { playerInfo, judgmentEvent, resultEvent, sessionIdFor, sessionStartEvent } from './play-events.js';
 import { chartPhrases } from './guitar-od.js';
 import { createOverdriveSession } from './overdrive-session.js';
 import { quickSettingPatch, soloShowsCrowd } from './solo.js';
@@ -364,7 +364,47 @@ export function createBandRuntime({
         const api = win.feedBackDrums;
         if (!canvas || s.hidden.drums.has(canvas) || !api || typeof api.setScoreHudHidden !== 'function') return;
         s.hidden.drums.add(canvas);
-        safe(() => api.setScoreHudHidden(canvas, true));
+        const mode = laneHudMode(s, api);
+        safe(() => api.setScoreHudHidden(canvas, mode));
+    }
+
+    // One local player (playSolo, an adopt, or a band of one): the lane keeps its own
+    // HUD. Decided once per session, after the stage's drops, so a part dropping out
+    // later (vocals that couldn't start) never takes the band score away mid-song.
+    function soloHud(s) {
+        if (s.laneHudSolo === undefined && Array.isArray(s.scoreParts)) s.laneHudSolo = s.scoreParts.length === 1;
+        return s.laneHudSolo === true;
+    }
+
+    // What a drums / 5-fret lane's setScoreHudHidden gets (C1). A plugin with HUD
+    // modes (hudModes()) keeps its whole HUD in solo (false) and its streak HUD in a
+    // band ('score': score, stars and accuracy hidden). An older plugin hides it all
+    // (true), as before, and its own adoptsSolo gate hides it in solo anyway.
+    function laneHudMode(s, api) {
+        const modes = api && typeof api.hudModes === 'function' ? safe(() => api.hudModes()) : null;
+        if (!Array.isArray(modes)) return true;
+        if (soloHud(s)) return false;
+        return modes.includes('score') ? 'score' : true;
+    }
+
+    // A player's lane plugin API (drums / 5-fret), or null (guitar, vocals).
+    function partApi(s, id) {
+        if (id === 'drums') return win.feedBackDrums || null;
+        return isControllerId(id) ? safe(() => lanes.laneApiOf(s, id)) || null : null;
+    }
+
+    // A player's lane canvas, or null (guitar, vocals, a lane not mounted).
+    function playerCanvas(s, id) {
+        if (id === 'drums') return bandDrumCanvas(s);
+        if (!isControllerId(id) || !stage || typeof stage.getLaneCanvas !== 'function') return null;
+        return safe(() => stage.getLaneCanvas(id)) || null;
+    }
+
+    // The slim band bar (song and stars): a solo whose lane shows its own HUD.
+    function slimHud(s) {
+        if (!soloHud(s) || s.scoreParts.length !== 1) return false;
+        const api = partApi(s, s.scoreParts[0]);
+        return !!api && typeof api.setScoreHudHidden === 'function' && laneHudMode(s, api) === false;
     }
 
     // ---- Controller lanes (Plan 3): controller-lanes.js ----
@@ -376,6 +416,7 @@ export function createBandRuntime({
         isLive: (s) => scoring() === s,
         displayTime,
         record,
+        hudMode: (s, api) => laneHudMode(s, api),
         onDeploy: (s, id) => {
             if (s.od && !s.failed.has(id)) { const od = s.od; safe(() => od.deployed(id)); }
             record(s, { part: id, t: displayTime(s), kind: 'deploy' });
@@ -468,6 +509,8 @@ export function createBandRuntime({
             oneLevel: !(s.readyDetail && s.readyDetail.hasPhraseData),
             // Solo screen's crowd meter switch (B2, plan phase 8).
             crowd: soloShowsCrowd(s.prefs, s.solo),
+            // The lane shows its own score and streak HUD (C1).
+            slim: slimHud(s),
         })) || null;
         if (s.hud) safe(() => s.hud.update(s.score.snapshot()));
         // A remount keeps the dropped-out lanes grey.
@@ -577,24 +620,54 @@ export function createBandRuntime({
         if (s.hud) safe(() => s.hud.update(s.score.snapshot(), silent ? { silent: true } : undefined));
     }
 
-    function record(s, entry) {
+    // detail: the lane event the entry came from, for play:judgment's timing.
+    function record(s, entry, detail) {
         if (!entry) return;
         s.score.record(entry);
-        emitJudgment(s, entry);
+        emitJudgment(s, entry, detail);
         refreshHud(s, false);
         syncFailures(s);
     }
 
     // play:judgment (contract §3) for every entry the ledger took (a part still in
     // the band); a listener that throws never breaks scoring.
-    function emitJudgment(s, entry) {
+    function emitJudgment(s, entry, laneDetail) {
         if (typeof fb.emit !== 'function' || !s.scoreParts.includes(entry.part)) return;
         const part = s.score.snapshot().parts[entry.part];
+        const lane = laneDetail && typeof laneDetail === 'object' ? laneDetail : null;
         const detail = judgmentEvent({
             filename: s.item.filename, sessionId: s.sessionId, entry,
             info: playerInfo(entry.part, s.prefs), totals: part,
+            detail: lane, canvas: (lane && lane.canvas) || playerCanvas(s, entry.part),
         });
         safe(() => fb.emit('play:judgment', detail));
+    }
+
+    // play:session-start (contract §3), once per session, when its stage first mounts.
+    function emitSessionStart(s) {
+        if (s.startSent || !s.score || typeof fb.emit !== 'function') return;
+        s.startSent = true;
+        const cur = fb.currentSong || {};
+        const detail = sessionStartEvent({
+            sessionId: s.sessionId, filename: s.item.filename,
+            title: s.item.title || cur.title, artist: s.item.artist || cur.artist,
+            players: s.scoreParts, prefs: s.prefs, canvasOf: (id) => playerCanvas(s, id),
+        });
+        safe(() => fb.emit('play:session-start', detail));
+    }
+
+    // play:session-end (contract §3), once, for a session that started: 'results' when
+    // the results open, 'leave' when the player left mid-song, else 'teardown'.
+    function emitSessionEnd(s, reason) {
+        if (!s.startSent || s.endSent || typeof fb.emit !== 'function') return;
+        s.endSent = true;
+        safe(() => fb.emit('play:session-end', { sessionId: s.sessionId, reason }));
+    }
+
+    // play:rewind (contract §3): the ledger rewound to t (a backward seek, a loop wrap).
+    function emitRewind(s, t) {
+        if (!s.startSent || typeof fb.emit !== 'function') return;
+        safe(() => fb.emit('play:rewind', { sessionId: s.sessionId, t }));
     }
 
     // play:result (contract §3), once per session, when the results open.
@@ -702,6 +775,7 @@ export function createBandRuntime({
         s.score.rewindTo(d.to);
         s.lastT = d.to;
         if (s.vocalsReset !== undefined) s.score.syncTotals('vocals', s.vocalsReset);
+        emitRewind(s, d.to);
         refreshHud(s, true);
         syncFailures(s, { silent: true });
     }
@@ -1617,6 +1691,7 @@ export function createBandRuntime({
             applyHides(s);
             enableGuitarDetect(s);
             mountChrome(s);
+            emitSessionStart(s);
         },
         applyDifficulties(s) {
             if (isOn(s.prefs, 'guitar')) {
@@ -1713,6 +1788,7 @@ export function createBandRuntime({
             // A song slowed down to its end was practice too (B3).
             practiceDispatch(s, { type: 'rate', rate: playbackRate() });
             const result = emitResult(s, drumsSt);
+            emitSessionEnd(s, 'results');
             // The sidebar is for the playing song only (plan 7 R21).
             if (s.sidebar) { const sb = s.sidebar; safe(() => sb.close()); }
             // So are Settings and the leave prompt: closed, resuming nothing.
@@ -1756,6 +1832,8 @@ export function createBandRuntime({
             release = null;
         },
         teardown(s) {
+            // Listeners hear the end before anything is undone (the lane canvases are still up).
+            emitSessionEnd(s, s.endReason || 'teardown');
             // The pads first: nothing later in teardown can leave them muted.
             releasePadSound(s);
             // Plan 7, first and silently: nothing resumes, every class and
@@ -1886,6 +1964,8 @@ export function createBandRuntime({
     // State is committed before effects run, so an effect that re-enters
     // (release() closes the player and announces screen:changing) sees it.
     function dispatch(event) {
+        // Left mid-song (Esc, End song, held Back, a screen change): play:session-end 'leave'.
+        if (session && event && event.type === 'left' && state.phase === 'playing') session.endReason = 'leave';
         const { state: next, effects } = reduceSession(state, event);
         state = next;
         const s = session;
@@ -2037,7 +2117,7 @@ export function createBandRuntime({
         if (canvas && s.hidden.drums.size) hideDrumHud(s, canvas);
         // Drums never take an overdrive factor (R4): their points already
         // include the drums engine's own star-power doubling.
-        record(s, drumsEntry(type, e && e.detail, displayTime(s), canvas));
+        record(s, drumsEntry(type, e && e.detail, displayTime(s), canvas), e && e.detail);
         const d = e && e.detail;
         if (!d || !canvas || d.canvas !== canvas || !s.scoreParts.includes('drums')) return;
         if (type === 'overhit' && songPaused(s)) return;
@@ -2064,9 +2144,9 @@ export function createBandRuntime({
         const d = e && e.detail;
         if (!s || !d || !d.canvas) return;
         const canvas = bandDrumCanvas(s);
-        if (canvas && d.canvas === canvas) { record(s, drumsBonusEntry(d, displayTime(s), canvas)); return; }
+        if (canvas && d.canvas === canvas) { record(s, drumsBonusEntry(d, displayTime(s), canvas), d); return; }
         const id = lanes.laneOwner(s, d.canvas);
-        if (id) record(s, drumsBonusEntry(d, displayTime(s), d.canvas, id));
+        if (id) record(s, drumsBonusEntry(d, displayTime(s), d.canvas, id), d);
     };
     // Deploys (R18): drums star power on the band's drum canvas, karaoke's overdrive.
     // A dropped-out part's deploy is recorded but ignored by the ledger (R12), so its
@@ -2124,6 +2204,7 @@ export function createBandRuntime({
         s.lastT = d.to;
         if (s.vocalsReset !== undefined) s.score.syncTotals('vocals', s.vocalsReset);
         if (s.od) { const od = s.od; safe(() => od.rewindTo(d.to)); }
+        emitRewind(s, d.to);
         refreshHud(s, true);
         syncFailures(s, { silent: true });
     };
@@ -2224,6 +2305,16 @@ export function createBandRuntime({
         canAdopt: () => typeof adopt === 'function',
         // Whether a one-player session (solo or adopted) with a scoring player runs.
         // The plugins hide their own HUD only then (rockHeroSmith.adoptsSolo).
+        // rockHeroSmith.ownsLane (C1): a session (solo, adopted or band, any adoptSolo
+        // pref) scores on `canvas`: the real drummer's lane (the drums-only #highway too) or
+        // a controller lane, from the mount through the results. The plugins leave the
+        // song end (their end card, their local best) to RockHeroSmith's results then.
+        ownsLane: (canvas) => {
+            const s = session;
+            if (!canvas || !s || !s.score || (state.phase !== 'playing' && state.phase !== 'ending')) return false;
+            if (s.scoreParts.some((id) => playerCanvas(s, id) === canvas)) return true;
+            return isControllerId(safe(() => lanes.laneOwner(s, canvas)));
+        },
         soloActive: () => !!session && session.solo && state.phase !== 'idle' && !!session.score && session.scoreParts.length > 0,
         startSession,
         phase: () => state.phase,
