@@ -6096,46 +6096,78 @@ test('play:rewind on a backward seek and a loop wrap; never on a forward or tiny
     rt.dispose();
 });
 
-// ---- C1 follow-up: a Scorecard that covers every local instrument keeps its HUD ----
+// ---- C1 review: the Scorecard is always hidden during a session; ownsLane(canvas) ----
 const scHides = (calls) => calls.hides.filter((h) => h[0] === 'scorecard');
 
-test('Scorecard covering every local non-vocal instrument is never hidden (solo and band)', async () => {
+test('the Scorecard HUD is hidden during every session, even one whose instruments() covers the players', async () => {
+    // A newer Scorecard hides only its guitar HUD on setHudHidden(true); an older one hides it all.
     const solo = setup();
     solo.win.feedBackScorecard.instruments = () => ['guitar', 'drums', 'five_fret'];
     solo.rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
     solo.loadSong(DRUM_ITEM);
-    assert.deepEqual(scHides(solo.calls), []);
+    assert.deepEqual(scHides(solo.calls), [['scorecard', true]]);
     solo.rt.dispose();
-    assert.deepEqual(scHides(solo.calls), [], 'nothing to restore either');
+    assert.deepEqual(scHides(solo.calls), [['scorecard', true], ['scorecard', false]]);
 
-    // A band of drums + 5-fret (+ vocals, which never count).
     const band = setup();
-    band.win.feedBackScorecard.instruments = () => ['drums', 'five_fret'];
-    await goCtl(band, ctlPrefs([PAD1], { guitar: { on: false }, vocals: { on: true } }));
-    assert.equal(band.rt.phase(), 'playing');
-    assert.deepEqual(scHides(band.calls), []);
+    band.win.feedBackScorecard.instruments = () => ['guitar', 'drums', 'five_fret'];
+    await goCtl(band, ctlPrefs([PAD1]));
+    assert.deepEqual(scHides(band.calls), [['scorecard', true]], 'a guitar band never shows the Scorecard score beside the band score');
+    band.fb.emit('song:stop', {});
+    assert.deepEqual(scHides(band.calls).at(-1), ['scorecard', false]);
     band.rt.dispose();
 });
 
-test('Scorecard missing an instrument, or without instruments(), is hidden as before and restored', async () => {
-    const partial = setup();
-    partial.win.feedBackScorecard.instruments = () => ['guitar', 'drums'];
-    await goCtl(partial, ctlPrefs([PAD1], { guitar: { on: false } }));
-    assert.deepEqual(scHides(partial.calls), [['scorecard', true]], 'five_fret not covered');
-    partial.fb.emit('song:stop', {});
-    assert.deepEqual(scHides(partial.calls), [['scorecard', true], ['scorecard', false]]);
-    partial.rt.dispose();
+test('ownsLane: true on the drums-only #highway for a playSolo (any adoptSolo pref) through its results; false after', () => {
+    const env = setup();
+    const { rt, fb, loadSong, highwayCanvas, doc } = env;
+    assert.equal(rt.ownsLane(highwayCanvas), false, 'idle');
+    rt.startSession({ song: DRUM_ITEM, prefs: { ...kitSolo(), adoptSolo: false }, solo: true });
+    assert.equal(rt.ownsLane(highwayCanvas), false, 'armed: not scoring yet');
+    loadSong(DRUM_ITEM);
+    assert.equal(rt.ownsLane(highwayCanvas), true);
+    assert.equal(rt.ownsLane(doc.createElement('canvas')), false, 'another canvas');
+    assert.equal(rt.ownsLane(null), false);
+    fb.emit('song:ended', {});
+    assert.equal(rt.phase(), 'ending');
+    assert.equal(rt.ownsLane(highwayCanvas), true, 'the results own the song end');
+    rt.next();
+    assert.equal(rt.ownsLane(highwayCanvas), false);
+    rt.dispose();
+});
 
-    const broken = setup();
-    broken.win.feedBackScorecard.instruments = () => { throw new Error('boom'); };
-    broken.rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
-    broken.loadSong(DRUM_ITEM);
-    assert.deepEqual(scHides(broken.calls), [['scorecard', true]]);
-    broken.rt.dispose();
+test('ownsLane: a one-player band setup session, an adopted play, and a replaced #highway', async () => {
+    const env = setup();
+    const { rt, fb, loadSong, highwayCanvas, doc } = env;
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo() });
+    loadSong(DRUM_ITEM);
+    assert.equal(rt.soloActive(), false, 'not a solo session');
+    assert.equal(rt.ownsLane(highwayCanvas), true);
+    const fresh = doc.createElement('canvas');
+    fb.emit('highway:canvas-replaced', { oldCanvas: highwayCanvas, newCanvas: fresh });
+    assert.equal(rt.ownsLane(fresh), true, 'the clone');
+    fb.emit('song:stop', {});
+    assert.equal(rt.ownsLane(fresh), false);
+    rt.dispose();
 
-    const old = setup();
-    old.rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
-    old.loadSong(DRUM_ITEM);
-    assert.deepEqual(scHides(old.calls), [['scorecard', true]]);
-    old.rt.dispose();
+    const { env: a } = adoptEnv();
+    a.loadSong(DRUM_ITEM);
+    await flush();
+    assert.equal(a.rt.ownsLane(a.highwayCanvas), true, 'adopted');
+    a.fb.emit('song:stop', {});
+    assert.equal(a.rt.ownsLane(a.highwayCanvas), false);
+    a.rt.dispose();
+});
+
+test('ownsLane: a band\'s drum lane and every controller lane; not the guitar #highway', async () => {
+    const env = setup();
+    await goCtl(env, ctlPrefs([PAD1, KIT2]));
+    const m = env.mounts[0];
+    assert.equal(env.rt.ownsLane(m.drumCanvas), true, 'the real drummer\'s lane');
+    assert.equal(env.rt.ownsLane(m.ctlCanvas.ctl1), true, '5-fret controller');
+    assert.equal(env.rt.ownsLane(m.ctlCanvas.ctl2), true, 'drums controller');
+    assert.equal(env.rt.ownsLane(env.highwayCanvas), false, 'guitar is scored off the lane');
+    env.fb.emit('song:stop', {});
+    assert.equal(env.rt.ownsLane(m.ctlCanvas.ctl1), false);
+    env.rt.dispose();
 });

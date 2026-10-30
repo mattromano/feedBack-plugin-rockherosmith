@@ -31,6 +31,13 @@ rockHeroSmith.adoptsSolo() -> boolean
   // true only while RockHeroSmith scores the plain play on the main #highway: prefs.adoptSolo
   // on, no splitscreen, and an adopt pending or a solo / adopted session running. Cheap
   // (in-memory prefs): the plugins ask every frame and hide their own HUD only when true
+rockHeroSmith.ownsLane(canvas) -> boolean
+  // true while any RockHeroSmith session (playSolo, adopted, band, a band of one; prefs.adoptSolo
+  // on or off) scores on `canvas`: the real drummer's lane (the drums-only #highway, or the
+  // stage's drum lane, following canvas replacements) or any controller lane, from the stage
+  // mount through the results screen. False when idle, armed, or after the session ends.
+  // The drums plugin skips its own end card and drums_best_v1 write while it is true:
+  // RockHeroSmith's results own the song end.
 ```
 
 - `kind: 'kit'` builds prefs with `parts.drums.on = true` (deviceKey = the connected
@@ -129,9 +136,9 @@ and report `hudModes() -> ['score']`. RockHeroSmith gives a lane:
 Teardown sets `false` on every lane it touched. The plugins' `adoptsSolo` gate no longer hides
 their HUD (only their end card and local best).
 
-Scorecard: RockHeroSmith calls `feedBackScorecard.setHudHidden(true)` for a session unless
-`feedBackScorecard.instruments()` exists and lists the instrument of every local non-vocal
-player (`'guitar'` | `'drums'` | `'five_fret'`), solo or band.
+Scorecard: RockHeroSmith calls `feedBackScorecard.setHudHidden(true)` during every session, as
+before. A Scorecard that scores drums / 5-Fret hides only its guitar HUD on it (so a guitar band
+never shows the Scorecard score beside the band score); an older one hides everything.
 
 ## 4. Drums plugin (`window.feedBackDrums`, additive)
 

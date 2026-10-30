@@ -142,6 +142,14 @@ function init() {
             if (safe(() => window.slopsmithSplitscreen && window.slopsmithSplitscreen.isActive()) === true) return false;
             return safe(() => prefsCache.get().adoptSolo === true) === true;
         },
+        // Whether a RockHeroSmith session (solo, adopted or band, whatever prefs.adoptSolo
+        // says) scores on this lane canvas, through its results: the plugins then skip their
+        // own end card and local best. Cheap; never throws.
+        ownsLane: (canvas) => {
+            const rt = window.__rockherosmithRuntime;
+            if (!rt || typeof rt.ownsLane !== 'function') return false;
+            return safe(() => rt.ownsLane(canvas)) === true;
+        },
     });
 }
 

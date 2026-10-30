@@ -473,21 +473,10 @@ export function createBandRuntime({
         // A controller lane's replaced canvas gets its score HUD hidden again.
         if (s.ctlCanvas.size) listenCanvas(s);
         const sc = win.feedBackScorecard;
-        if (!s.hidden.scorecard && sc && typeof sc.setHudHidden === 'function' && !scorecardCovers(s, sc)) {
+        if (!s.hidden.scorecard && sc && typeof sc.setHudHidden === 'function') {
             s.hidden.scorecard = true;
             safe(() => sc.setHudHidden(true));
         }
-    }
-
-    // A Scorecard that scores every local non-vocal player's instrument
-    // (feedBackScorecard.instruments()) keeps its HUD, solo or band (C1).
-    function scorecardCovers(s, sc) {
-        if (typeof sc.instruments !== 'function') return false;
-        const list = safe(() => sc.instruments());
-        if (!Array.isArray(list)) return false;
-        const needed = (s.scoreParts || []).filter((id) => id !== 'vocals')
-            .map((id) => playerInfo(id, s.prefs).instrument);
-        return needed.length > 0 && needed.every((inst) => typeof inst === 'string' && list.includes(inst));
     }
 
     function undoHides(s) {
@@ -2316,6 +2305,16 @@ export function createBandRuntime({
         canAdopt: () => typeof adopt === 'function',
         // Whether a one-player session (solo or adopted) with a scoring player runs.
         // The plugins hide their own HUD only then (rockHeroSmith.adoptsSolo).
+        // rockHeroSmith.ownsLane (C1): a session (solo, adopted or band, any adoptSolo
+        // pref) scores on `canvas`: the real drummer's lane (the drums-only #highway too) or
+        // a controller lane, from the mount through the results. The plugins leave the
+        // song end (their end card, their local best) to RockHeroSmith's results then.
+        ownsLane: (canvas) => {
+            const s = session;
+            if (!canvas || !s || !s.score || (state.phase !== 'playing' && state.phase !== 'ending')) return false;
+            if (s.scoreParts.some((id) => playerCanvas(s, id) === canvas)) return true;
+            return isControllerId(safe(() => lanes.laneOwner(s, canvas)));
+        },
         soloActive: () => !!session && session.solo && state.phase !== 'idle' && !!session.score && session.scoreParts.length > 0,
         startSession,
         phase: () => state.phase,
