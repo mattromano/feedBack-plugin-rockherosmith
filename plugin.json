@@ -1,7 +1,7 @@
 {
   "id": "rockherosmith",
   "name": "RockHeroSmith",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "RockHeroSmith: play a song together, real guitar alongside Guitar Hero / Rock Band controllers.",
   "license": "MIT",
   "nav": {

@@ -73,7 +73,25 @@ Emitted only by RockHeroSmith. Core and plugins consume these, never `drums:*` /
   part,                          // 'drums' | 'guitar' | 'rhythm' | 'bass' | 'vocals' | 'lead'…
   input,                         // 'kit' | 'controller' | 'mic' | 'audio'
   kind,                          // ledger kind: 'hit' | 'miss' | 'overhit' | 'sustain' | 'phrase' | 'deploy' | 'bonus'
-  points, multiplier, streak, t, noteTime   // noteTime null when unknown
+  points, multiplier, streak, t, noteTime,  // noteTime null when unknown
+  offsetMs,                      // signed ms, hit minus note (+ = late); null off a hit or unreported
+  timing,                        // 'early' | 'late' | 'on' | null; 'on' within ±20 ms, or the
+                                 //   lane event's own perfectMs / perfectWindowMs when it has one
+  canvas,                        // the player's lane canvas (in-page bus only, never serialised); null
+                                 //   for guitar / vocals
+  local: true,                   // judged on this machine
+}
+'play:session-start' {           // once per session, when its stage first mounts (solo, adopted, band)
+  sessionId, filename, title, artist,   // title / artist null when unknown
+  band: boolean,                 // more than one player
+  players: [{ player, instrument, part, input, difficulty, canvas }]   // canvas as in play:judgment
+}
+'play:rewind' { sessionId, t }   // the ledger rewound to t (a backward seek > 50 ms, or a loop wrap)
+'play:session-end' {             // once, for a session that sent play:session-start
+  sessionId,
+  reason,                        // 'results' (the results opened: song end or fail)
+                                 // 'leave'   (left mid-song: Esc, End song, held Back, stop)
+                                 // 'teardown' (anything else: another song loading, …)
 }
 'play:result' {
   filename, sessionId, band: boolean,   // band = more than one player
@@ -94,6 +112,22 @@ Emitted only by RockHeroSmith. Core and plugins consume these, never `drums:*` /
 
 `play:result` fires once, when the results screen opens (song end or fail), not on
 leave mid-song.
+
+The offset source is the lane event: the 5-Fret plugin's `five_fret:hit` `offsetMs` (ms), else
+the Drums plugin's `drums:hit` `offset` (seconds × 1000), rounded to whole ms.
+
+### Lane HUD modes (amendment, 2026-10-29)
+
+The drums and 5-Fret plugins take `setScoreHudHidden(canvas, mode)`, mode `true` (hide the
+whole HUD) | `false` (show it) | `'score'` (hide only the score number, stars and accuracy;
+keep streak, multiplier, pops, combo rings, full combo, early / late and the star power meter),
+and report `hudModes() -> ['score']`. RockHeroSmith gives a lane:
+- one local player (playSolo, adopted, a band of one): `false`, and its own bar shrinks to
+  song, stars and (when on) the crowd meter;
+- a band: `'score'` when `hudModes()` includes it, else `true`;
+- a plugin without `hudModes`: `true` in every case (as before).
+Teardown sets `false` on every lane it touched. The plugins' `adoptsSolo` gate no longer hides
+their HUD (only their end card and local best).
 
 ## 4. Drums plugin (`window.feedBackDrums`, additive)
 

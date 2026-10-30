@@ -36,12 +36,33 @@ export function playerInfo(id, prefs) {
     return { player: id, instrument: null, part: null, input: null, difficulty };
 }
 
+// A hit within this many ms of its note is 'on' time, unless the lane event
+// carries its own perfect window (perfectMs / perfectWindowMs).
+export const PERFECT_MS = 20;
+
+// A judgment's timing from its lane event: offsetMs (+ = late; the 5-fret plugin's
+// offsetMs, else the drums engine's offset in seconds) and timing, for hits only.
+export function hitTiming(kind, detail) {
+    const none = { offsetMs: null, timing: null };
+    if (kind !== 'hit' || !detail || typeof detail !== 'object') return none;
+    const raw = finite(detail.offsetMs) ? detail.offsetMs : (finite(detail.offset) ? detail.offset * 1000 : null);
+    if (raw === null) return none;
+    const offsetMs = Math.round(raw);
+    const win = finite(detail.perfectMs) ? detail.perfectMs
+        : (finite(detail.perfectWindowMs) ? detail.perfectWindowMs : PERFECT_MS);
+    const timing = Math.abs(offsetMs) <= win ? 'on' : (offsetMs < 0 ? 'early' : 'late');
+    return { offsetMs, timing };
+}
+
 // play:judgment for one recorded ledger entry. points: what the ledger scores
 // (points x factor). totals: the part's { multiplier, streak } after the entry,
-// for entries that carry none (a deploy, a bonus).
-export function judgmentEvent({ filename, sessionId, entry, info, totals }) {
+// for entries that carry none (a deploy, a bonus). detail: the lane event the entry
+// came from (its timing), when there is one; canvas: the player's lane canvas
+// (in-page only, never serialised). local: judged on this machine.
+export function judgmentEvent({ filename, sessionId, entry, info, totals, detail = null, canvas = null }) {
     const e = entry || {};
     const tot = totals || {};
+    const { offsetMs, timing } = hitTiming(e.kind, detail);
     return {
         filename, sessionId,
         player: info.player, instrument: info.instrument, part: info.part, input: info.input,
@@ -51,6 +72,25 @@ export function judgmentEvent({ filename, sessionId, entry, info, totals }) {
         streak: num(e.streak, num(tot.streak, 0)),
         t: num(e.t, 0),
         noteTime: finite(e.noteTime) ? e.noteTime : null,
+        offsetMs, timing,
+        canvas: canvas || null,
+        local: true,
+    };
+}
+
+// play:session-start: the session, the song and who plays (players: the ledger's
+// player ids; canvasOf(id): that player's lane canvas, or null).
+export function sessionStartEvent({ sessionId, filename, title, artist, players, prefs, canvasOf }) {
+    const ids = Array.isArray(players) ? players : [];
+    return {
+        sessionId, filename,
+        title: typeof title === 'string' && title ? title : null,
+        artist: typeof artist === 'string' && artist ? artist : null,
+        band: ids.length > 1,
+        players: ids.map((id) => ({
+            ...playerInfo(id, prefs),
+            canvas: (typeof canvasOf === 'function' && canvasOf(id)) || null,
+        })),
     };
 }
 

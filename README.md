@@ -44,6 +44,11 @@ The Solo screen is for playing alone: a band of one on the RockHeroSmith stage.
   5-Fret view is scored by RockHeroSmith as a band of one (HUD, results, drop-outs). It
   still leaves like any song: Esc, End song and Results' **Next song** go back to where you
   started it.
+- **The lane's own HUD in solo.** With a Drums / 5-Fret plugin that has HUD modes, a solo
+  song keeps the lane's full HUD (multiplier ring, note streak, score pops, combo rings,
+  full combo, early / late, star power), and the bar on top shrinks to the song and stars
+  (plus the crowd meter when it is on). In a band each lane keeps its streak HUD but not its
+  own score; the band bar keeps the band score.
 
 ## Playing on a controller
 

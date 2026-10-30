@@ -1,7 +1,7 @@
 // The play layer's events out (contract §3): play:judgment / play:result payloads, pure.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { playerInfo, judgmentEvent, resultEvent, sessionIdFor } from '../src/play-events.js';
+import { playerInfo, judgmentEvent, resultEvent, sessionIdFor, hitTiming, sessionStartEvent, PERFECT_MS } from '../src/play-events.js';
 import { createBandScore } from '../src/band-score.js';
 import { normalizePrefs } from '../src/prefs.js';
 
@@ -31,6 +31,7 @@ test('judgmentEvent: the entry plus who, scored points, and the part totals afte
     assert.deepEqual(ev, {
         filename: 'a.sloppak', sessionId: 's1', player: 'ctl1', instrument: 'five_fret', part: 'rhythm', input: 'controller',
         kind: 'hit', points: 100, multiplier: 3, streak: 9, t: 3.5, noteTime: 3.49,
+        offsetMs: null, timing: null, canvas: null, local: true,
     });
     // A deploy or bonus carries no multiplier / streak: the part's totals fill them; noteTime unknown is null.
     const bonus = judgmentEvent({
@@ -106,4 +107,58 @@ test('resultEvent: sections per player (stream B3), copied; missing is []', () =
     assert.deepEqual(ev.players[0].sections, [verse]);
     assert.notEqual(ev.players[0].sections[0], verse, 'a copy: listeners never touch the runtime\'s rows');
     assert.deepEqual(ev.players[1].sections, []);
+});
+
+// ---- Contract §3 amendment (C1): timing, lane canvas, session lifecycle ----
+
+test('hitTiming: offsetMs (+ = late) from five-fret offsetMs or drums offset (seconds); null off a hit', () => {
+    assert.equal(PERFECT_MS, 20);
+    assert.deepEqual(hitTiming('hit', { offsetMs: -35 }), { offsetMs: -35, timing: 'early' });
+    assert.deepEqual(hitTiming('hit', { offsetMs: 41 }), { offsetMs: 41, timing: 'late' });
+    assert.deepEqual(hitTiming('hit', { offsetMs: 20 }), { offsetMs: 20, timing: 'on' }, 'within the window is on');
+    assert.deepEqual(hitTiming('hit', { offsetMs: -20 }), { offsetMs: -20, timing: 'on' });
+    // The drums engine reports `offset` in seconds (hit time minus note time).
+    assert.deepEqual(hitTiming('hit', { offset: 0.0304 }), { offsetMs: 30, timing: 'late' });
+    assert.deepEqual(hitTiming('hit', { offset: -0.004 }), { offsetMs: -4, timing: 'on' });
+    // offsetMs wins over offset when both are there.
+    assert.deepEqual(hitTiming('hit', { offsetMs: -50, offset: 0.5 }), { offsetMs: -50, timing: 'early' });
+    // The plugin's own perfect window, when the event carries one.
+    assert.deepEqual(hitTiming('hit', { offsetMs: 30, perfectMs: 35 }), { offsetMs: 30, timing: 'on' });
+    assert.deepEqual(hitTiming('hit', { offsetMs: 30, perfectWindowMs: 25 }), { offsetMs: 30, timing: 'late' });
+    for (const kind of ['miss', 'overhit', 'sustain', 'deploy', 'bonus', 'phrase']) {
+        assert.deepEqual(hitTiming(kind, { offsetMs: 10 }), { offsetMs: null, timing: null }, kind);
+    }
+    assert.deepEqual(hitTiming('hit', {}), { offsetMs: null, timing: null }, 'no offset reported');
+    assert.deepEqual(hitTiming('hit', null), { offsetMs: null, timing: null });
+});
+
+test('judgmentEvent: timing from the lane event, the lane canvas, local: true', () => {
+    const canvas = { tag: 'lane' };
+    const ev = judgmentEvent({
+        filename: 'a', sessionId: 's1', entry: { part: 'drums', t: 2, kind: 'hit', points: 50, multiplier: 1, streak: 1 },
+        info: playerInfo('drums', prefs), totals: {}, detail: { canvas, offset: -0.03 }, canvas,
+    });
+    assert.deepEqual([ev.offsetMs, ev.timing, ev.canvas, ev.local], [-30, 'early', canvas, true]);
+    const miss = judgmentEvent({
+        filename: 'a', sessionId: 's1', entry: { part: 'drums', t: 2, kind: 'miss', points: 0 },
+        info: playerInfo('drums', prefs), totals: {}, detail: { canvas, offset: 0.2 }, canvas,
+    });
+    assert.deepEqual([miss.offsetMs, miss.timing, miss.canvas, miss.local], [null, null, canvas, true]);
+});
+
+test('sessionStartEvent: the session, the song and each player with its lane canvas', () => {
+    const c1 = { tag: 'ctl1' };
+    const ev = sessionStartEvent({
+        sessionId: 's1', filename: 'a.sloppak', title: 'Holiday', artist: 'Green Day',
+        players: ['drums', 'ctl1'], prefs, canvasOf: (id) => (id === 'ctl1' ? c1 : null),
+    });
+    assert.deepEqual(ev, {
+        sessionId: 's1', filename: 'a.sloppak', title: 'Holiday', artist: 'Green Day', band: true,
+        players: [
+            { player: 'drums', instrument: 'drums', part: 'drums', input: 'kit', difficulty: 'expert', canvas: null },
+            { player: 'ctl1', instrument: 'five_fret', part: 'rhythm', input: 'controller', difficulty: 'medium', canvas: c1 },
+        ],
+    });
+    const one = sessionStartEvent({ sessionId: 's2', filename: 'b', players: ['drums'], prefs });
+    assert.deepEqual([one.band, one.title, one.artist, one.players[0].canvas], [false, null, null, null]);
 });

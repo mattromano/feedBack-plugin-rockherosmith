@@ -4792,7 +4792,8 @@ test('play:judgment for every ledger entry, with the session id and who played',
     assert.equal(got.judgment.length, 2);
     const [hit, miss] = got.judgment;
     assert.deepEqual(hit, { filename: DRUM_ITEM.filename, sessionId: hit.sessionId, player: 'drums', instrument: 'drums',
-        part: 'drums', input: 'kit', kind: 'hit', points: 50, multiplier: 2, streak: 3, t: 4, noteTime: null });
+        part: 'drums', input: 'kit', kind: 'hit', points: 50, multiplier: 2, streak: 3, t: 4, noteTime: null,
+        offsetMs: null, timing: null, canvas: highwayCanvas, local: true });
     assert.equal(typeof hit.sessionId, 'string');
     assert.equal(miss.kind, 'miss');
     assert.equal(miss.sessionId, hit.sessionId);
@@ -5865,5 +5866,232 @@ test('one kit solo through playSolo: crowd off, Part sheet, sections, practice f
     assert.deepEqual(calls.showScreen, [SOLO_SCREEN_ID]);
     assert.equal(rt.phase(), 'idle');
     soloScreen.dispose();
+    rt.dispose();
+});
+
+// ---- C1: the lane's own HUD in solo, its streak HUD in a band, richer play:* events ----
+
+// The drums / 5-fret plugins' HUD modes (setScoreHudHidden(canvas, true | false | 'score')).
+function withHudModes(env, modes = ['score']) {
+    if (env.win.feedBackDrums) env.win.feedBackDrums.hudModes = () => modes.slice();
+    if (env.win.feedBackFiveFret) env.win.feedBackFiveFret.hudModes = () => modes.slice();
+    return env;
+}
+const laneBar = (player) => player.querySelector('.rhs-hud');
+// Every play:* lifecycle event, in order.
+function lifecycle(fb) {
+    const got = [];
+    for (const name of ['play:session-start', 'play:rewind', 'play:session-end']) {
+        fb.on(name, (e) => got.push([name, e.detail]));
+    }
+    return got;
+}
+
+test('kit solo with a plugin that has HUD modes: the lane keeps its own HUD (false, never true); slim band bar', () => {
+    const env = withHudModes(setup());
+    const { rt, calls, loadSong, highwayCanvas, player, fb } = env;
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    const drums = calls.hides.filter((h) => h[0] === 'drums');
+    assert.deepEqual(drums, [['drums', highwayCanvas, false]]);
+    const bar = laneBar(player);
+    assert.ok(bar && bar.classList.contains('rhs-hud-slim'), 'the slim bar');
+    assert.equal(player.querySelector('.rhs-hud-score'), null, 'no duplicate score');
+    assert.equal(player.querySelector('.rhs-hud-band'), null, 'no BAND ×N, no band bonus');
+    assert.ok(player.querySelector('.rhs-hud-stars'));
+    assert.ok(player.querySelector('.rhs-hud-song'));
+    assert.equal(player.querySelectorAll('.rhs-crowd').length, 1, 'crowd meter on by default');
+    // Scoring still runs, and the results are unchanged.
+    fb.emit('drums:hit', drEv(highwayCanvas, { points: 50, combo: 1 }));
+    assert.equal(rt.snapshot().parts.drums.score, 50);
+    fb.emit('song:ended', {});
+    assert.ok(player.querySelector('.rhs-results'), 'results show');
+    rt.next();
+    // Teardown: false again on the lane it touched, never true.
+    assert.ok(calls.hides.filter((h) => h[0] === 'drums').every((h) => h[2] === false));
+    assert.equal(calls.hides.filter((h) => h[0] === 'drums').length, 2);
+    rt.dispose();
+});
+
+test('kit solo with the crowd meter off: slim bar, no crowd', () => {
+    const env = withHudModes(setup());
+    env.rt.startSession({ song: DRUM_ITEM, prefs: { ...kitSolo(), solo: { crowd: false } }, solo: true });
+    env.loadSong(DRUM_ITEM);
+    assert.ok(laneBar(env.player).classList.contains('rhs-hud-slim'));
+    assert.equal(env.player.querySelectorAll('.rhs-crowd').length, 0);
+    env.rt.dispose();
+});
+
+test('kit solo with an older drums plugin (no hudModes): today\'s hide and full band bar', () => {
+    const env = setup();
+    const { rt, calls, loadSong, highwayCanvas, player } = env;
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    assert.deepEqual(calls.hides.filter((h) => h[0] === 'drums'), [['drums', highwayCanvas, true]]);
+    assert.equal(laneBar(player).classList.contains('rhs-hud-slim'), false);
+    assert.ok(player.querySelector('.rhs-hud-score'));
+    rt.dispose();
+});
+
+test('an adopted 5-fret solo with HUD modes keeps the lane HUD (false) and the slim bar', async () => {
+    const adoptPrefs = { prefs: { ...prefsWith(NO_REAL), controllers: [{ ...PAD1, part: 'bass' }] },
+        song: { filename: FF_ITEM.filename, five_fret_parts: ['bass:chart'] } };
+    const { env } = adoptEnv({ adoptPrefs });
+    withHudModes(env);
+    env.loadSong(FF_ITEM);
+    await flush();
+    assert.equal(env.rt.phase(), 'playing');
+    const canvas = env.mounts[0].ctlCanvas.ctl1;
+    assert.deepEqual(ffHides(env.calls), [['five_fret', canvas, false]]);
+    assert.ok(laneBar(env.player).classList.contains('rhs-hud-slim'));
+    env.fb.emit('song:stop', {});
+    assert.ok(ffHides(env.calls).every((h) => h[2] === false));
+    env.rt.dispose();
+});
+
+test("band: lanes with HUD modes get 'score' (streak HUD kept, score hidden); the band bar is unchanged; teardown restores false", async () => {
+    const env = withHudModes(setup());
+    const { rt, calls, mounts, player, fb } = env;
+    await goCtl(env, ctlPrefs([PAD1, { ...PAD2, part: 'guitar' }], { guitar: { on: false }, drums: { on: true } }));
+    const m = mounts[0];
+    assert.deepEqual(ffHides(calls), [['five_fret', m.ctlCanvas.ctl1, 'score'], ['five_fret', m.ctlCanvas.ctl2, 'score']]);
+    assert.deepEqual(calls.hides.filter((h) => h[0] === 'drums').map((h) => h[2]), ['score']);
+    assert.equal(laneBar(player).classList.contains('rhs-hud-slim'), false);
+    assert.ok(player.querySelector('.rhs-hud-score'));
+    assert.ok(player.querySelector('.rhs-hud-band'));
+    fb.emit('song:stop', {});
+    const last = new Map();
+    for (const h of calls.hides) if (h.length === 3) last.set(h[1], h[2]);
+    assert.ok(last.size >= 3);
+    assert.ok([...last.values()].every((v) => v === false), JSON.stringify([...last.values()]));
+    rt.dispose();
+});
+
+test("band: a plugin whose hudModes lacks 'score' still gets true; one without hudModes too", async () => {
+    const env = withHudModes(setup(), []);
+    await goCtl(env, ctlPrefs([PAD1, PAD2], NO_REAL));
+    assert.ok(ffHides(env.calls).length === 2 && ffHides(env.calls).every((h) => h[2] === true));
+    env.rt.dispose();
+    const old = setup();
+    await goCtl(old, ctlPrefs([PAD1, PAD2], NO_REAL));
+    assert.ok(ffHides(old.calls).every((h) => h[2] === true));
+    old.rt.dispose();
+});
+
+test('band: a drum canvas replaced mid-song gets the same mode', () => {
+    const env = withHudModes(setup());
+    const { rt, fb, calls, loadSong, mounts, doc } = env;
+    rt.startSession({ song: DRUM_ITEM, prefs: prefsWith() });
+    loadSong(DRUM_ITEM);
+    const lane = mounts[0].drumCanvas;
+    assert.deepEqual(drumHides(calls, lane), ['score']);
+    const fresh = doc.createElement('canvas');
+    mounts[0].drumCanvas = fresh;
+    mounts[0].getDrumCanvas = () => fresh;
+    fb.emit('highway:canvas-replaced', { oldCanvas: lane, newCanvas: fresh });
+    assert.deepEqual(drumHides(calls, fresh), ['score']);
+    rt.dispose();
+    assert.deepEqual(drumHides(calls, fresh).at(-1), false);
+});
+
+test('play:judgment carries offsetMs / timing from the lane event, the lane canvas and local: true', async () => {
+    const env = setup();
+    const { rt, fb, loadSong, highwayCanvas } = env;
+    const got = playEvents(fb);
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    fb.emit('drums:hit', drEv(highwayCanvas, { points: 50, offset: -0.031 }));
+    fb.emit('drums:hit', drEv(highwayCanvas, { points: 50, offset: 0.005 }));
+    fb.emit('drums:miss', drEv(highwayCanvas, { combo: 0 }));
+    fb.emit('drums:overhit', drEv(highwayCanvas, { combo: 0 }));
+    const rows = got.judgment.map((j) => [j.kind, j.offsetMs, j.timing, j.canvas === highwayCanvas, j.local]);
+    assert.deepEqual(rows, [
+        ['hit', -31, 'early', true, true], ['hit', 5, 'on', true, true],
+        ['miss', null, null, true, true], ['overhit', null, null, true, true],
+    ]);
+    rt.dispose();
+    // A 5-fret lane reports offsetMs (ms) on five_fret:hit.
+    const ff = setup();
+    const g2 = playEvents(ff.fb);
+    await goCtl(ff, soloCtl());
+    const canvas = ff.mounts[0].ctlCanvas.ctl1;
+    ff.fb.emit('five_fret:hit', ffEv(canvas, { score: 50, offsetMs: 42 }));
+    assert.deepEqual([g2.judgment[0].offsetMs, g2.judgment[0].timing, g2.judgment[0].canvas === canvas], [42, 'late', true]);
+    ff.rt.dispose();
+});
+
+test('play:session-start when a solo session plays: song, band false, the player with its lane canvas', () => {
+    const env = setup();
+    const { rt, fb, loadSong, highwayCanvas } = env;
+    const got = lifecycle(fb);
+    rt.startSession({ song: { ...DRUM_ITEM, title: 'Beat', artist: 'Band' }, prefs: kitSolo({ difficulty: 'hard' }), solo: true });
+    assert.deepEqual(got, [], 'not before it plays');
+    loadSong(DRUM_ITEM);
+    assert.equal(got.length, 1);
+    const [name, d] = got[0];
+    assert.equal(name, 'play:session-start');
+    assert.deepEqual({ ...d, players: d.players.map((p) => ({ ...p, canvas: p.canvas === highwayCanvas })) }, {
+        sessionId: d.sessionId, filename: DRUM_ITEM.filename, title: 'Beat', artist: 'Band', band: false,
+        players: [{ player: 'drums', instrument: 'drums', part: 'drums', input: 'kit', difficulty: 'hard', canvas: true }],
+    });
+    assert.equal(typeof d.sessionId, 'string');
+    rt.dispose();
+});
+
+test('play:session-start for an adopted play and a band; play:session-end leave / teardown', async () => {
+    const { env } = adoptEnv();
+    const got = lifecycle(env.fb);
+    env.loadSong(DRUM_ITEM);
+    await flush();
+    assert.deepEqual(got.map((g) => g[0]), ['play:session-start']);
+    const id = got[0][1].sessionId;
+    env.fb.emit('song:stop', {});
+    assert.deepEqual(got[1], ['play:session-end', { sessionId: id, reason: 'leave' }]);
+    env.rt.dispose();
+    assert.equal(got.length, 2, 'one end per session');
+
+    const band = setup();
+    const g2 = lifecycle(band.fb);
+    await goCtl(band, ctlPrefs([PAD1], { guitar: { on: false } }));
+    const start = g2[0][1];
+    assert.equal(start.band, true);
+    assert.deepEqual(start.players.map((p) => p.player), ['drums', 'ctl1']);
+    assert.equal(start.players[1].canvas, band.mounts[0].ctlCanvas.ctl1);
+    // Another song loading tears the session down.
+    band.fb.emit('song:loading', { filename: 'next.sloppak' });
+    assert.deepEqual(g2.at(-1), ['play:session-end', { sessionId: start.sessionId, reason: 'teardown' }]);
+    band.rt.dispose();
+});
+
+test('play:session-end reason results when the results open, once; Play again starts a new session', () => {
+    const env = setup();
+    const { rt, fb, loadSong } = env;
+    const got = lifecycle(fb);
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    const first = got[0][1].sessionId;
+    fb.emit('song:ended', {});
+    assert.deepEqual(got.at(-1), ['play:session-end', { sessionId: first, reason: 'results' }]);
+    rt.again();
+    loadSong(DRUM_ITEM);
+    const names = got.map((g) => g[0]);
+    assert.deepEqual(names, ['play:session-start', 'play:session-end', 'play:session-start']);
+    assert.notEqual(got[2][1].sessionId, first);
+    rt.dispose();
+    assert.deepEqual(got.at(-1), ['play:session-end', { sessionId: got[2][1].sessionId, reason: 'leave' }]);
+});
+
+test('play:rewind on a backward seek and a loop wrap; never on a forward or tiny seek', () => {
+    const env = setup();
+    const { rt, fb, loadSong } = env;
+    const got = lifecycle(fb);
+    rt.startSession({ song: DRUM_ITEM, prefs: kitSolo(), solo: true });
+    loadSong(DRUM_ITEM);
+    const id = got[0][1].sessionId;
+    fb.emit('song:seek', { from: 20, to: 19.98 });
+    fb.emit('song:seek', { from: 5, to: 30 });
+    fb.emit('song:seek', { from: 20, to: 15 });
+    fb.emit('song:seek', { from: 30, to: 10, reason: 'loop-wrap' });
+    assert.deepEqual(got.slice(1), [['play:rewind', { sessionId: id, t: 15 }], ['play:rewind', { sessionId: id, t: 10 }]]);
     rt.dispose();
 });
