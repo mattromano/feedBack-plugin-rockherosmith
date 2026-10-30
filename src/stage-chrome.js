@@ -1,7 +1,7 @@
-// The stage's hover chrome (plan 7 R5, R7, R20): a row of band buttons (Menu, A-B
-// loop, Full screen, End) that core's own chrome-active reveal shows above the
-// transport, and a 10 px left edge that opens the sidebar in full mode. Draws only:
-// the caller decides what each button does.
+// The stage's hover chrome (plan 7 R5, R20): a row of band buttons (Menu, Part,
+// A-B loop, Full screen, End) that core's own chrome-active reveal shows above the
+// transport. Draws only: the caller decides what each button does. Core's tool rail
+// keeps the left edge in both modes, so the sidebar opens from Menu (or M).
 import { icon } from './icons.js';
 
 const ICON_PX = 18;
@@ -11,9 +11,10 @@ const LOOP = {
     ab: { text: 'Clear loop', title: 'Clear loop' },
 };
 
-// createStageChrome({ doc, player, full, onMenu, onLoop, onFullScreen, onEnd, onEdge })
-//   -> { setFull(on), setLoop(state), destroy() }
-export function createStageChrome({ doc, player, full, onMenu, onLoop, onFullScreen, onEnd, onEdge }) {
+// createStageChrome({ doc, player, full, onMenu, onPart, onLoop, onFullScreen, onEnd })
+//   -> { setFull(on), setLoop(state), setPart(on), destroy() }
+// Part (the Part sheet, also P) starts hidden; setPart(true) shows it.
+export function createStageChrome({ doc, player, full, onMenu, onPart, onLoop, onFullScreen, onEnd }) {
     const row = doc.createElement('div');
     row.className = 'rhs-chrome';
 
@@ -40,6 +41,11 @@ export function createStageChrome({ doc, player, full, onMenu, onLoop, onFullScr
     }
 
     button('rhs-chrome-menu', 'menu', 'Menu (M)', onMenu);
+    const partBtn = button('rhs-chrome-part', 'sliders-horizontal', 'Part settings (P)', onPart);
+    const partLabel = doc.createElement('span');
+    partLabel.className = 'rhs-chrome-label';
+    partLabel.textContent = 'Part';
+    partBtn.appendChild(partLabel);
     const loopBtn = button('rhs-chrome-loop', 'repeat', '', onLoop);
     const loopLabel = doc.createElement('span');
     loopLabel.className = 'rhs-chrome-label';
@@ -47,16 +53,11 @@ export function createStageChrome({ doc, player, full, onMenu, onLoop, onFullScr
     const fullBtn = button('rhs-chrome-full', 'maximize', '', onFullScreen);
     button('rhs-chrome-end', 'log-out', 'End song', onEnd);
 
-    const edge = doc.createElement('div');
-    edge.className = 'rhs-edge';
-    edge.addEventListener('pointerenter', () => { if (typeof onEdge === 'function') onEdge(); });
-
     player.appendChild(row);
-    player.appendChild(edge);
 
     let destroyed = false;
 
-    // Both are no-ops once destroyed, so a late call can't put rhs-full back.
+    // All are no-ops once destroyed, so a late call can't put rhs-full back.
     function setFull(on) {
         if (destroyed) return;
         const isFull = !!on;
@@ -73,17 +74,23 @@ export function createStageChrome({ doc, player, full, onMenu, onLoop, onFullScr
         setTitle(loopBtn, s.title);
     }
 
+    function setPart(on) {
+        if (destroyed) return;
+        partBtn.hidden = !on;
+    }
+
     setFull(full);
     setLoop('none');
+    setPart(false);
 
     return {
         setFull,
         setLoop,
+        setPart,
         destroy() {
             if (destroyed) return;
             destroyed = true;
             row.remove();
-            edge.remove();
             player.classList.remove('rhs-full');
         },
     };

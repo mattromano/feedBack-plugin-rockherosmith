@@ -110,11 +110,14 @@ The Solo screen is for playing alone: a band of one on the RockHeroSmith stage.
   A Go from a drum pad, or a window that already fills the screen, keeps full mode inside
   the window.
 - **The hover chrome.** Moving the mouse shows core's transport, the section map and a band
-  row with Menu, the A-B loop (Loop A, Loop B, Clear loop), Full screen and End song.
-- **`M` and the sidebar.** `M`, the Menu button or (in full mode) the left edge open the app
-  sidebar over the song, which keeps playing. Esc, a click outside it or leaving it (when
-  the edge opened it) closes it. With the sidebar shut, Esc leaves the song as usual.
-- **Part settings mid-song.** **P**, or **Part** at the top of the sidebar, opens the Part
+  row with Menu, Part (when there is a Part sheet), the A-B loop (Loop A, Loop B, Clear
+  loop), Full screen and End song. Core's tool rail (plugin controls, mixer, stems,
+  practice) reveals from the left edge, windowed or in full mode.
+- **`M` and the sidebar.** `M` or the Menu button opens the app sidebar over the song, which
+  keeps playing. Esc or a click outside it closes it. With the sidebar shut, Esc leaves the
+  song as usual.
+- **Part settings mid-song.** **P**, the **Part** button in the hover chrome, or **Part** at
+  the top of the sidebar, opens the Part
   sheet over the song, which keeps playing: for each drummer (the real kit and drums
   controllers) and each 5-Fret controller, that plugin's quick settings for its lane
   (difficulty, auto kick and cymbals, pro cymbals, timing, input offset, pad volume; for

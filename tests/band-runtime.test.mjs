@@ -3224,14 +3224,14 @@ test('the sidebar, M and the chrome exist only while the song plays', () => {
     keyWin('KeyM', 'm');
     assert.ok(!bodyHas(doc, 'rhs-sidebar-open'));
     player.querySelector('.rhs-chrome-menu').click();
-    player.querySelector('.rhs-edge').fire('pointerenter');
+    player.querySelector('.rhs-chrome-part').click();
     assert.ok(!bodyHas(doc, 'rhs-sidebar-open'), 'the chrome opens nothing under the results');
+    assert.equal(player.querySelector('.rhs-part-sheet'), null);
     sidebar.fire('click', { target: navLinks.settings });
     assert.ok(!bodyHas(doc, 'rhs-settings-over'));
     assert.equal(calls.pause, 0);
     rt.next();
     assert.equal(player.querySelector('.rhs-chrome'), null);
-    assert.equal(player.querySelector('.rhs-edge'), null);
     rt.dispose();
 });
 
@@ -5449,6 +5449,24 @@ test("the stage menu's Part item opens the sheet; a guitar-only band has none", 
     assert.equal(g.sidebar.querySelector('.rhs-sidebar-item'), null);
     assert.equal(g.keyWin('KeyP', 'p').defaultPrevented, false, 'P is left alone');
     assert.equal(g.rt.openPartSheet(), false);
+    g.rt.dispose();
+});
+
+test("the chrome's Part button shows with a sheet to open and opens it; a guitar-only band has none", () => {
+    const env = setup();
+    quickSettings(env);
+    env.rt.startSession({ song: STEM_ITEM, prefs: kitSolo(), solo: true });
+    env.loadSong(STEM_ITEM);
+    const btn = env.player.querySelector('.rhs-chrome-part');
+    assert.equal(btn.hidden, false);
+    btn.click();
+    assert.ok(sheetEl(env));
+    assert.equal(env.calls.pause, 0, 'opening never pauses');
+    env.rt.dispose();
+    const g = setup();
+    g.rt.startSession({ song: ITEM, prefs: prefsWith({ drums: { on: false } }) });
+    g.loadSong(ITEM);
+    assert.equal(g.player.querySelector('.rhs-chrome-part').hidden, true);
     g.rt.dispose();
 });
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Part button on the stage.** The hover chrome has a **Part** button (beside Menu) that opens the Part sheet, so mid-song difficulty and the other quick settings no longer depend on remembering **P**. It shows only when there is a sheet to open.
+
+### Fixed
+- **Core's tool rail in full mode.** Full mode (the stage's default) hid core's left rail, so plugin controls, the mixer, stems and practice were out of reach on the stage. The rail now reveals from the left edge as it does windowed; the full-mode left edge no longer opens the sidebar (Menu and **M** still do).
+
 ## [0.3.1] - Unreleased
 
 ### Changed
