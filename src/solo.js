@@ -209,12 +209,15 @@ function matches(win, id, info) {
 }
 
 // What a plain play on the main highway would be adopted as: the drum view on a drum
-// part -> { kind: 'drums' }; the 5-fret view -> { kind: 'five_fret', controllerKey?, part?,
+// part -> { kind: 'drums' } (not while the Drums plugin plays Freestyle: no score, so
+// nothing for RockHeroSmith to judge or keep); the 5-fret view -> { kind: 'five_fret', controllerKey?, part?,
 // difficulty? } (the controller playing it and its pick, when its instance reports them); else null.
 export function adoptTarget(win, doc) {
     const viz = currentViz(win, doc);
     if (viz === 'drums') {
         const info = safe(() => win.highway.getSongInfo()) || {};
+        const drums = win && win.feedBackDrums;
+        if (drums && typeof drums.isFreestyle === 'function' && safe(() => drums.isFreestyle()) === true) return null;
         return matches(win, 'drums', info) ? { kind: 'drums' } : null;
     }
     if (viz === 'five_fret') {
