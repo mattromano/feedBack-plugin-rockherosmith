@@ -257,6 +257,16 @@ test('adoptTarget: the drum view on a drum part, the 5-fret view, nothing else',
     assert.equal(adoptTarget(g.win, g.doc), null);
 });
 
+test('adoptTarget: a drums play in Freestyle (no score) is left to the Drums plugin', () => {
+    const d = vizWin({ picker: 'drums' });
+    d.win.feedBackDrums = { isFreestyle: () => true };
+    assert.equal(adoptTarget(d.win, d.doc), null);
+    d.win.feedBackDrums = { isFreestyle: () => false };
+    assert.deepEqual(adoptTarget(d.win, d.doc), { kind: 'drums' });
+    d.win.feedBackDrums = { isFreestyle: () => { throw new Error('x'); } };
+    assert.deepEqual(adoptTarget(d.win, d.doc), { kind: 'drums' }, 'a throwing check adopts as before');
+});
+
 test('createAdopt: off without adoptSolo; kit on the drum view with MIDI; the playing 5-fret controller', async () => {
     const d = vizWin({ picker: 'drums' });
     d.win.feedBackDrums = { midiInput: () => ({ key: 'TD-17', connected: true }), listControllers: async () => [] };

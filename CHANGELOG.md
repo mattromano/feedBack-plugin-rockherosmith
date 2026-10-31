@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Drums Freestyle is left alone.** A plain drums play is not adopted while the Drums plugin's Play style is Freestyle (`feedBackDrums.isFreestyle()`): no stars bar, no results screen and no saved run for a song played without a score. The Solo screen and band songs still play scored.
 - **Part button on the stage.** The hover chrome has a **Part** button (beside Menu) that opens the Part sheet, so mid-song difficulty and the other quick settings no longer depend on remembering **P**. It shows only when there is a sheet to open.
 
 ### Fixed
